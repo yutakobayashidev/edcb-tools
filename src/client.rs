@@ -50,8 +50,8 @@ const CMD_EPG_SRV_GET_STATUS_NOTIFY2: i32 = 2200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginKind {
-    Write = 1,
-    RecName = 2,
+    RecName = 1,
+    Write = 2,
 }
 
 #[derive(Debug, Clone)]

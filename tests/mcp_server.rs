@@ -112,7 +112,7 @@ fn plugin_kind_param_parses_supported_values() {
         }
         .try_into_plugin_kind()
         .expect("write plugin kind should parse") as u16,
-        1
+        2
     );
     assert_eq!(
         PluginKindParam {
@@ -120,7 +120,7 @@ fn plugin_kind_param_parses_supported_values() {
         }
         .try_into_plugin_kind()
         .expect("rec_name plugin kind should parse") as u16,
-        2
+        1
     );
     assert!(
         PluginKindParam {
