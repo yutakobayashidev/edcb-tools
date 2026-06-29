@@ -3,7 +3,7 @@ name = "edcb-mcp"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "Rust EDCB CtrlCmd client library"
+description = "Rust EDCB CtrlCmd client library, CLI, and MCP server"
 
 [lib]
 name = "edcb_mcp"

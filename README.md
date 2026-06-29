@@ -1,15 +1,17 @@
 # edcb-mcp
 
-Rust client library for EDCB/EpgTimer CtrlCmd.
+Rust client library, command line interface, and MCP server for EDCB/EpgTimer
+CtrlCmd.
 
-This crate currently provides a Tokio-based TCP client and binary codec for the
-read-oriented CtrlCmd APIs used by EDCB integrations. The implementation is
-ported from `xtne6f/edcb.py`, with KonomiTV's async usage used as a secondary
-reference.
+This crate currently provides a Tokio-based TCP client, binary codec, `edcb`
+CLI, and `edcb-mcp` stdio MCP server for the read-oriented CtrlCmd APIs used by
+EDCB integrations. The implementation is ported from `xtne6f/edcb.py`, with
+KonomiTV's async usage used as a secondary reference.
 
 ## Supported in v1
 
 - TCP transport
+- `edcb` command line interface
 - stdio MCP server surface
 - EDCB primitive, string, vector, struct, and `SYSTEMTIME` codec
 - Service, EPG, reserve, recorded-file, tuner, plugin, auto-add, manual-add,
@@ -47,9 +49,40 @@ async fn main() -> edcb_mcp::Result<()> {
 }
 ```
 
+## Command Line Interface
+
+Run the `edcb` CLI with CLI options:
+
+```sh
+cargo run --bin edcb -- --host 127.0.0.1 --port 4510 services
+```
+
+The same connection settings can be supplied through environment variables:
+
+```sh
+EDCB_HOST=127.0.0.1 EDCB_PORT=4510 EDCB_TIMEOUT_SECONDS=15 cargo run --bin edcb -- services
+```
+
+CLI options take precedence over environment variables. Defaults are
+`127.0.0.1`, port `4510`, and a 15 second timeout.
+
+Output is a stable line-based summary by default. Use `--json` for full
+structured output.
+
+Available commands:
+
+- `services`
+- `reserves`
+- `recorded list`
+- `recorded get <info-id>`
+- `tuner-reserves`
+- `tuner-processes`
+- `plugins <write|rec_name>`
+- `notify-status`
+
 ## MCP Server
 
-Run the stdio MCP server with CLI options:
+Run the `edcb-mcp` stdio MCP server with CLI options:
 
 ```sh
 cargo run --bin edcb-mcp -- --host 127.0.0.1 --port 4510 --timeout-seconds 15
