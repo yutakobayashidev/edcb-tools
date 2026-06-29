@@ -8,27 +8,28 @@ description: Use when working with the edcb-tools CLI or MCP server for EDCB Ctr
 ## Overview
 
 Use the `edcb` binary as the first-class command line surface for EDCB CtrlCmd
-operations in this repository. Prefer Nix flake invocation in user-facing
-examples, then Cargo invocation for development.
+operations. Assume callers may be in any repository or working directory, so
+prefer the installed `edcb` command when it is on `PATH`; otherwise use the
+GitHub flake app.
 
 ## Invocation
 
-Use local flake apps from this repo:
+Before running CLI examples, check whether `edcb` is available:
 
 ```sh
-nix run .#edcb -- --host 127.0.0.1 --port 4510 services
+command -v edcb
 ```
 
-Use GitHub flake apps for installed/distributed usage:
+If that succeeds, call `edcb` directly:
+
+```sh
+edcb --host 127.0.0.1 --port 4510 services
+```
+
+If `edcb` is not available, use the GitHub flake app:
 
 ```sh
 nix run github:yutakobayashidev/edcb-tools#edcb -- --host 127.0.0.1 services
-```
-
-Use Cargo only for development:
-
-```sh
-cargo run --bin edcb -- --host 127.0.0.1 --port 4510 services
 ```
 
 Global flags:
