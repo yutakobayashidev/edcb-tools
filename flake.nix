@@ -1,5 +1,5 @@
 {
-  description = "A Nix-flake-based Rust development environment";
+  description = "EDCB CtrlCmd Rust client library, CLI, and MCP server";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -47,7 +47,68 @@
               rust-src
             ]
           );
+
+        edcb-mcp = final.callPackage (
+          {
+            lib,
+            makeRustPlatform,
+            rustToolchain,
+          }:
+
+          let
+            rustPlatform = makeRustPlatform {
+              cargo = rustToolchain;
+              rustc = rustToolchain;
+            };
+          in
+          rustPlatform.buildRustPackage {
+            pname = "edcb-mcp";
+            version = "0.1.0";
+            src = lib.fileset.toSource {
+              root = ./.;
+              fileset = lib.fileset.unions [
+                ./Cargo.lock
+                ./Cargo.toml
+                ./src
+              ];
+            };
+            cargoLock.lockFile = ./Cargo.lock;
+
+            meta = {
+              description = "EDCB CtrlCmd Rust client library, CLI, and MCP server";
+              homepage = "https://github.com/yutakobayashidev/edcb-mcp";
+              license = lib.licenses.mit;
+              mainProgram = "edcb";
+            };
+          }
+        ) { };
       };
+
+      packages = forEachSupportedSystem (
+        { pkgs, ... }:
+        {
+          default = pkgs.edcb-mcp;
+          edcb-mcp = pkgs.edcb-mcp;
+        }
+      );
+
+      apps = forEachSupportedSystem (
+        { pkgs, ... }:
+        let
+          edcb = {
+            type = "app";
+            program = "${pkgs.edcb-mcp}/bin/edcb";
+          };
+          edcb-mcp = {
+            type = "app";
+            program = "${pkgs.edcb-mcp}/bin/edcb-mcp";
+          };
+        in
+        {
+          default = edcb;
+          inherit edcb edcb-mcp;
+        }
+      );
 
       devShells = forEachSupportedSystem (
         { pkgs, system }:
@@ -72,6 +133,21 @@
         }
       );
 
-      formatter = forEachSupportedSystem ({ pkgs, ... }: pkgs.nixfmt);
+      formatter = forEachSupportedSystem (
+        { pkgs, ... }:
+        pkgs.writeShellApplication {
+          name = "format-edcb-mcp";
+          runtimeInputs = [
+            pkgs.nixfmt
+          ];
+          text = ''
+            if [ "$#" -eq 0 ]; then
+              nixfmt flake.nix
+            else
+              nixfmt "$@"
+            fi
+          '';
+        }
+      );
     };
 }

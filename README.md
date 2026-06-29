@@ -8,6 +8,55 @@ CLI, and `edcb-mcp` stdio MCP server for CtrlCmd APIs used by EDCB
 integrations. The implementation is ported from `xtne6f/edcb.py`, with
 KonomiTV's async usage used as a secondary reference.
 
+## Distribution
+
+Nix flake is the primary distribution surface. The default package builds both
+first-class binaries:
+
+- `edcb`
+- `edcb-mcp`
+
+Run the CLI directly from GitHub:
+
+```sh
+nix run github:yutakobayashidev/edcb-mcp#edcb -- --host 127.0.0.1 services
+```
+
+Run the stdio MCP server directly from GitHub:
+
+```sh
+nix run github:yutakobayashidev/edcb-mcp#edcb-mcp -- --host 127.0.0.1 --port 4510
+```
+
+Install both binaries into a Nix profile:
+
+```sh
+nix profile install github:yutakobayashidev/edcb-mcp#edcb-mcp
+```
+
+Use the package from another flake:
+
+```nix
+{
+  inputs.edcb-mcp.url = "github:yutakobayashidev/edcb-mcp";
+
+  outputs = { edcb-mcp, ... }: {
+    # edcb-mcp.packages.${system}.default
+    # edcb-mcp.packages.${system}.edcb-mcp
+    # edcb-mcp.apps.${system}.edcb
+    # edcb-mcp.apps.${system}.edcb-mcp
+  };
+}
+```
+
+The Rust client library is intended to be consumed from this repository, not
+published to crates.io:
+
+```toml
+[dependencies]
+edcb-mcp = { git = "https://github.com/yutakobayashidev/edcb-mcp" }
+```
+
 ## Supported in v1
 
 - TCP transport
@@ -61,7 +110,13 @@ async fn main() -> edcb_mcp::Result<()> {
 
 ## Command Line Interface
 
-Run the `edcb` CLI with CLI options:
+Run the `edcb` CLI through the flake:
+
+```sh
+nix run .#edcb -- --host 127.0.0.1 --port 4510 services
+```
+
+During development, the same CLI can be run with Cargo:
 
 ```sh
 cargo run --bin edcb -- --host 127.0.0.1 --port 4510 services
@@ -119,7 +174,13 @@ Common recording options:
 
 ## MCP Server
 
-Run the `edcb-mcp` stdio MCP server with CLI options:
+Run the `edcb-mcp` stdio MCP server through the flake:
+
+```sh
+nix run .#edcb-mcp -- --host 127.0.0.1 --port 4510 --timeout-seconds 15
+```
+
+During development, the same server can be run with Cargo:
 
 ```sh
 cargo run --bin edcb-mcp -- --host 127.0.0.1 --port 4510 --timeout-seconds 15
@@ -176,6 +237,9 @@ deleted reservation data.
 Use the Nix dev shell through direnv, then run:
 
 ```sh
+nix fmt
+nix build
+nix run .#edcb -- --version
 cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
