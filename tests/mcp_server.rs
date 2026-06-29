@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use chrono::DateTime;
 use edcb_tools::{
-    BroadcastType, ProgramSearchQuery, SearchDateInfo, ServiceKey,
+    BroadcastType, ChannelType, ProgramSearchQuery, SearchDateInfo, ServiceKey, TimeTableQuery,
     mcp::{
-        EdcbMcpServer, PluginKindParam, SearchProgramsDateParam, SearchProgramsParam,
-        SearchProgramsServiceParam, ServerConfig,
+        EdcbMcpServer, GetTimetableParam, PluginKindParam, SearchProgramsDateParam,
+        SearchProgramsParam, SearchProgramsServiceParam, ServerConfig,
     },
 };
 use rmcp::ServiceExt;
@@ -227,6 +228,48 @@ fn search_programs_param_rejects_invalid_date_ranges() {
 }
 
 #[test]
+fn get_timetable_param_maps_to_query() {
+    let query = GetTimetableParam {
+        start_time: Some(
+            DateTime::parse_from_rfc3339("2026-06-29T19:00:00+09:00")
+                .expect("test start time should parse"),
+        ),
+        end_time: Some(
+            DateTime::parse_from_rfc3339("2026-06-29T23:00:00+09:00")
+                .expect("test end time should parse"),
+        ),
+        channel_type: Some(ChannelType::Gr),
+        services: Some(vec![SearchProgramsServiceParam {
+            network_id: 32736,
+            transport_stream_id: 32736,
+            service_id: 1024,
+        }]),
+    }
+    .try_into_query()
+    .expect("MCP timetable params should map to query");
+
+    assert_eq!(
+        query,
+        TimeTableQuery {
+            start_time: Some(
+                DateTime::parse_from_rfc3339("2026-06-29T19:00:00+09:00")
+                    .expect("test start time should parse")
+            ),
+            end_time: Some(
+                DateTime::parse_from_rfc3339("2026-06-29T23:00:00+09:00")
+                    .expect("test end time should parse")
+            ),
+            channel_type: Some(ChannelType::Gr),
+            services: vec![ServiceKey {
+                onid: 32736,
+                tsid: 32736,
+                sid: 1024,
+            }],
+        }
+    );
+}
+
+#[test]
 fn mcp_server_exposes_v1_tools() {
     let server = EdcbMcpServer::new(ServerConfig::default());
     let tool_names: Vec<_> = server.tool_names();
@@ -239,6 +282,7 @@ fn mcp_server_exposes_v1_tools() {
             "get_notify_status",
             "get_recorded_info",
             "get_reservation",
+            "get_timetable",
             "list_plugins",
             "list_recorded",
             "list_reserves",

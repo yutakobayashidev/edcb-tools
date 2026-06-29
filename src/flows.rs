@@ -1,14 +1,28 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, FixedOffset, Utc};
+
 use crate::client::EdcbClient;
 use crate::error::{EdcbError, Result};
 use crate::types::{
-    BroadcastType, EventInfo, EventKey, PostRecordingMode, ProgramSearchQuery, RecFileSetInfo,
-    RecSettingData, RecordSettingsPatch, RecordingFolder, RecordingMode, ReserveData,
-    SearchDateInfo, SearchKeyInfo, ServiceInfo, ServiceKey, ServiceRecordingMode,
+    BroadcastType, ChannelType, EventInfo, EventKey, PostRecordingMode, ProgramSearchQuery,
+    RecFileSetInfo, RecSettingData, RecordSettingsPatch, RecordingAvailability, RecordingFolder,
+    RecordingMode, ReservationStatus, ReserveData, SearchDateInfo, SearchKeyInfo, ServiceInfo,
+    ServiceKey, ServiceRecordingMode, TimeTable, TimeTableChannel, TimeTableDateRange,
+    TimeTableProgram, TimeTableProgramReservation, TimeTableQuery, TimeTableSubchannel,
 };
+use crate::util::datetime_to_file_time;
 
 const EPG_SERVICE_ALL_MASK: i64 = 0x0000_ffff_ffff_ffff;
 const EPG_LOOKUP_TIME_BEGIN: i64 = 1;
 const EPG_LOOKUP_TIME_END: i64 = i64::MAX;
+const INDEPENDENT_SUBCHANNEL_SECONDS_PER_DAY: i64 = 8 * 60 * 60;
+
+struct TimetablePrograms {
+    by_service: HashMap<ServiceKey, Vec<TimeTableProgram>>,
+    earliest: Option<DateTime<FixedOffset>>,
+    latest: Option<DateTime<FixedOffset>>,
+}
 
 pub async fn search_programs(
     client: &EdcbClient,
@@ -51,6 +65,388 @@ pub fn program_search_query_to_search_key(query: &ProgramSearchQuery) -> Result<
         chk_duration_max: query.duration_max.unwrap_or_default(),
         ..SearchKeyInfo::default()
     })
+}
+
+pub async fn get_timetable(client: &EdcbClient, query: &TimeTableQuery) -> Result<TimeTable> {
+    validate_timetable_query(query)?;
+    let services = resolve_timetable_services(client, query).await?;
+    let service_time_list = timetable_lookup_filter(&services, query);
+    let service_events = if service_time_list.is_empty() {
+        Vec::new()
+    } else {
+        client.enum_pg_info_ex(&service_time_list).await?
+    };
+    let reserves = client.enum_reserve().await.unwrap_or_default();
+    Ok(build_timetable(&services, service_events, &reserves, query))
+}
+
+fn validate_timetable_query(query: &TimeTableQuery) -> Result<()> {
+    if let (Some(start), Some(end)) = (query.start_time, query.end_time)
+        && end <= start
+    {
+        return Err(EdcbError::InvalidInput(
+            "timetable end_time must be later than start_time".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn resolve_timetable_services(
+    client: &EdcbClient,
+    query: &TimeTableQuery,
+) -> Result<Vec<ServiceInfo>> {
+    let mut services = client.enum_service().await?;
+    if let Some(channel_type) = query.channel_type {
+        services.retain(|service| service_channel_type(service) == Some(channel_type));
+    }
+    if query.services.is_empty() {
+        services.sort_by(timetable_service_sort_key);
+        return Ok(services);
+    }
+
+    let mut selected = Vec::new();
+    for key in &query.services {
+        if let Some(service) = services.iter().find(|service| service_key(service) == *key) {
+            selected.push(service.clone());
+        }
+    }
+    Ok(selected)
+}
+
+fn timetable_lookup_filter(services: &[ServiceInfo], query: &TimeTableQuery) -> Vec<i64> {
+    let start = query
+        .start_time
+        .map(datetime_to_file_time)
+        .unwrap_or(EPG_LOOKUP_TIME_BEGIN);
+    let end = query
+        .end_time
+        .map(datetime_to_file_time)
+        .unwrap_or(EPG_LOOKUP_TIME_END);
+    services
+        .iter()
+        .flat_map(|service| {
+            let key = service_key(service).to_search_id();
+            [0, key, start, end]
+        })
+        .collect()
+}
+
+fn build_timetable(
+    services: &[ServiceInfo],
+    service_events: Vec<crate::types::ServiceEventInfo>,
+    reserves: &[ReserveData],
+    query: &TimeTableQuery,
+) -> TimeTable {
+    let now = Utc::now().fixed_offset();
+    let events_by_service = events_by_service(service_events);
+    let programs = build_timetable_programs(services, &events_by_service, reserves, query, now);
+
+    TimeTable {
+        channels: build_timetable_channels(services, &programs.by_service),
+        date_range: timetable_date_range(query, programs.earliest, programs.latest),
+    }
+}
+
+fn build_timetable_channels(
+    services: &[ServiceInfo],
+    programs_by_service: &HashMap<ServiceKey, Vec<TimeTableProgram>>,
+) -> Vec<TimeTableChannel> {
+    let parent_by_service = parent_services(services);
+    let independent_subchannels = independent_subchannels(services, programs_by_service);
+    let mut channels = Vec::new();
+
+    for service in services {
+        let key = service_key(service);
+        let parent = parent_by_service.get(&key).copied().unwrap_or(key);
+        if parent != key && !independent_subchannels.contains(&key) {
+            continue;
+        }
+
+        let subchannels = services
+            .iter()
+            .filter(|candidate| {
+                let candidate_key = service_key(candidate);
+                parent_by_service.get(&candidate_key).copied() == Some(key)
+                    && candidate_key != key
+                    && !independent_subchannels.contains(&candidate_key)
+            })
+            .filter_map(|candidate| {
+                let candidate_key = service_key(candidate);
+                let programs = programs_by_service
+                    .get(&candidate_key)
+                    .cloned()
+                    .unwrap_or_default();
+                if programs.is_empty() {
+                    None
+                } else {
+                    Some(TimeTableSubchannel {
+                        service: candidate.clone(),
+                        programs,
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+
+        channels.push(TimeTableChannel {
+            service: service.clone(),
+            programs: programs_by_service.get(&key).cloned().unwrap_or_default(),
+            subchannels: if subchannels.is_empty() {
+                None
+            } else {
+                Some(subchannels)
+            },
+        });
+    }
+    channels
+}
+
+fn build_timetable_programs(
+    services: &[ServiceInfo],
+    events_by_service: &HashMap<ServiceKey, Vec<EventInfo>>,
+    reserves: &[ReserveData],
+    query: &TimeTableQuery,
+    now: DateTime<FixedOffset>,
+) -> TimetablePrograms {
+    let mut by_service = HashMap::new();
+    let mut earliest = None;
+    let mut latest = None;
+
+    for service in services {
+        let key = service_key(service);
+        let mut programs = events_by_service
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter(|event| event_overlaps_query(event, query))
+            .map(|event| {
+                include_event_range(event, &mut earliest, &mut latest);
+                TimeTableProgram {
+                    event: event.clone(),
+                    reservation: matching_reservation(event, reserves, now),
+                }
+            })
+            .collect::<Vec<_>>();
+        programs.sort_by_key(|program| program.event.start_time);
+        by_service.insert(key, programs);
+    }
+
+    TimetablePrograms {
+        by_service,
+        earliest,
+        latest,
+    }
+}
+
+fn include_event_range(
+    event: &EventInfo,
+    earliest: &mut Option<DateTime<FixedOffset>>,
+    latest: &mut Option<DateTime<FixedOffset>>,
+) {
+    if let Some(start) = event.start_time {
+        *earliest = Some(earliest.map_or(start, |value| value.min(start)));
+    }
+    if let Some(end) = event_end_time(event) {
+        *latest = Some(latest.map_or(end, |value| value.max(end)));
+    }
+}
+
+fn timetable_date_range(
+    query: &TimeTableQuery,
+    earliest: Option<DateTime<FixedOffset>>,
+    latest: Option<DateTime<FixedOffset>>,
+) -> TimeTableDateRange {
+    let fallback = query
+        .start_time
+        .or(query.end_time)
+        .unwrap_or_else(|| Utc::now().fixed_offset());
+    TimeTableDateRange {
+        earliest: earliest.unwrap_or(fallback),
+        latest: latest.or(query.end_time).unwrap_or(fallback),
+    }
+}
+
+fn events_by_service(
+    service_events: Vec<crate::types::ServiceEventInfo>,
+) -> HashMap<ServiceKey, Vec<EventInfo>> {
+    service_events
+        .into_iter()
+        .map(|item| (service_key(&item.service_info), item.event_list))
+        .collect()
+}
+
+fn event_overlaps_query(event: &EventInfo, query: &TimeTableQuery) -> bool {
+    let Some(start) = event.start_time else {
+        return true;
+    };
+    let end = event_end_time(event).unwrap_or(start);
+    if let Some(query_start) = query.start_time
+        && end <= query_start
+    {
+        return false;
+    }
+    if let Some(query_end) = query.end_time
+        && start >= query_end
+    {
+        return false;
+    }
+    true
+}
+
+fn matching_reservation(
+    event: &EventInfo,
+    reserves: &[ReserveData],
+    now: DateTime<FixedOffset>,
+) -> Option<TimeTableProgramReservation> {
+    reserves
+        .iter()
+        .find(|reserve| {
+            reserve.onid == event.onid
+                && reserve.tsid == event.tsid
+                && reserve.sid == event.sid
+                && reserve.eid == event.eid
+        })
+        .or_else(|| {
+            reserves
+                .iter()
+                .find(|reserve| reservation_overlaps_event(reserve, event))
+        })
+        .map(|reserve| reservation_metadata(reserve, now))
+}
+
+fn reservation_overlaps_event(reserve: &ReserveData, event: &EventInfo) -> bool {
+    if reserve.onid != event.onid || reserve.tsid != event.tsid || reserve.sid != event.sid {
+        return false;
+    }
+    let Some(event_start) = event.start_time else {
+        return false;
+    };
+    let event_end = event_end_time(event).unwrap_or(event_start);
+    let reserve_end =
+        reserve.start_time + ChronoDuration::seconds(i64::from(reserve.duration_second));
+    reserve.start_time < event_end && reserve_end > event_start
+}
+
+fn reservation_metadata(
+    reserve: &ReserveData,
+    now: DateTime<FixedOffset>,
+) -> TimeTableProgramReservation {
+    let reserve_end =
+        reserve.start_time + ChronoDuration::seconds(i64::from(reserve.duration_second));
+    let status = if reserve.rec_setting.rec_mode >= 5 {
+        ReservationStatus::Disabled
+    } else if reserve.start_time <= now && reserve_end > now {
+        ReservationStatus::Recording
+    } else {
+        ReservationStatus::Reserved
+    };
+    TimeTableProgramReservation {
+        id: reserve.reserve_id,
+        status,
+        recording_availability: match reserve.overlap_mode {
+            1 => RecordingAvailability::Partial,
+            2 => RecordingAvailability::Unavailable,
+            _ => RecordingAvailability::Full,
+        },
+    }
+}
+
+fn independent_subchannels(
+    services: &[ServiceInfo],
+    programs_by_service: &HashMap<ServiceKey, Vec<TimeTableProgram>>,
+) -> HashSet<ServiceKey> {
+    let parent_by_service = parent_services(services);
+    let mut seconds_by_day: BTreeMap<(ServiceKey, i32, u32), i64> = BTreeMap::new();
+
+    for service in services {
+        let key = service_key(service);
+        if parent_by_service.get(&key).copied().unwrap_or(key) == key {
+            continue;
+        }
+        for program in programs_by_service.get(&key).into_iter().flatten() {
+            let Some(start) = program.event.start_time else {
+                continue;
+            };
+            let broadcast_day = start - ChronoDuration::hours(4);
+            let duration = i64::from(program.event.duration_sec.unwrap_or_default().max(0));
+            *seconds_by_day
+                .entry((key, broadcast_day.year(), broadcast_day.ordinal()))
+                .or_default() += duration;
+        }
+    }
+
+    seconds_by_day
+        .into_iter()
+        .filter_map(|((key, _, _), seconds)| {
+            (seconds >= INDEPENDENT_SUBCHANNEL_SECONDS_PER_DAY).then_some(key)
+        })
+        .collect()
+}
+
+fn parent_services(services: &[ServiceInfo]) -> HashMap<ServiceKey, ServiceKey> {
+    let mut sorted = services.iter().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| timetable_service_sort_key(left, right));
+
+    let mut parents = HashMap::new();
+    let mut parent_by_stream = HashMap::new();
+    for service in sorted
+        .iter()
+        .filter(|service| service.service_type != 192)
+        .chain(sorted.iter().filter(|service| service.service_type == 192))
+    {
+        parent_by_stream
+            .entry((service.onid, service.tsid))
+            .or_insert_with(|| service_key(service));
+    }
+    for service in services {
+        let parent = parent_by_stream
+            .get(&(service.onid, service.tsid))
+            .copied()
+            .unwrap_or_else(|| service_key(service));
+        parents.insert(service_key(service), parent);
+    }
+    parents
+}
+
+fn service_channel_type(service: &ServiceInfo) -> Option<ChannelType> {
+    match service.onid {
+        4 => Some(ChannelType::Bs),
+        6 | 7 => Some(ChannelType::Cs),
+        10 => Some(ChannelType::Sky),
+        11 => Some(ChannelType::Bs4k),
+        0x7000..=0x7fff => Some(ChannelType::Gr),
+        _ => Some(ChannelType::Catv),
+    }
+}
+
+fn timetable_service_sort_key(left: &ServiceInfo, right: &ServiceInfo) -> std::cmp::Ordering {
+    (
+        left.remote_control_key_id,
+        left.onid,
+        left.tsid,
+        left.sid,
+        left.service_name.as_str(),
+    )
+        .cmp(&(
+            right.remote_control_key_id,
+            right.onid,
+            right.tsid,
+            right.sid,
+            right.service_name.as_str(),
+        ))
+}
+
+fn service_key(service: &ServiceInfo) -> ServiceKey {
+    ServiceKey {
+        onid: service.onid,
+        tsid: service.tsid,
+        sid: service.sid,
+    }
+}
+
+fn event_end_time(event: &EventInfo) -> Option<DateTime<FixedOffset>> {
+    let start = event.start_time?;
+    let duration = i64::from(event.duration_sec.unwrap_or_default().max(0));
+    Some(start + ChronoDuration::seconds(duration))
 }
 
 fn validate_program_search_query(query: &ProgramSearchQuery) -> Result<()> {

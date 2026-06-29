@@ -50,6 +50,7 @@ CLI flags take precedence over environment variables.
 - List recorded items: `edcb recorded list`
 - Get one recorded item: `edcb recorded get <info-id>`
 - Search programs: `edcb programs search [search options]`
+- Get timetable programs: `edcb programs timetable [timetable options]`
 - Search program titles only: `edcb programs search --keyword <text> --title-only`
 - Search within one service:
   `edcb programs search --keyword <text> --service <onid:tsid:sid>`
@@ -82,6 +83,20 @@ Program search options use EDCB `SearchKeyInfo`/`SearchPg` semantics:
 
 Do not invent `--from` or `--to` for program search. EDCB/KonomiTV date ranges
 are recurring weekday/time-of-day ranges, not absolute datetimes.
+
+Use `programs timetable` for EnumPgInfoEx-backed program table retrieval:
+
+```sh
+edcb --json programs timetable --channel-type gr
+edcb programs timetable --service 32736:32736:1024 --start-time 2026-06-29T19:00:00+09:00 --end-time 2026-06-29T23:00:00+09:00
+```
+
+Timetable options:
+
+- `--service <onid:tsid:sid>` (repeatable)
+- `--start-time <RFC3339 datetime>`
+- `--end-time <RFC3339 datetime>`
+- `--channel-type <gr|bs|cs|catv|sky|bs4k>`
 
 ## Reservation Commands
 

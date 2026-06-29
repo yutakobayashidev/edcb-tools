@@ -27,6 +27,13 @@ pub fn encode_service_list_for_test() -> Vec<u8> {
 }
 
 #[doc(hidden)]
+pub fn encode_services_for_test(services: &[ServiceInfo]) -> Vec<u8> {
+    let mut writer = Writer::new();
+    writer.write_vector(services, write_service_info);
+    writer.into_inner()
+}
+
+#[doc(hidden)]
 pub fn reserve_fixture_for_test() -> ReserveData {
     ReserveData {
         title: "Default Reserve".to_string(),
@@ -77,12 +84,27 @@ pub fn encode_reserve_for_test(reserve: &ReserveData) -> Vec<u8> {
 }
 
 #[doc(hidden)]
-pub fn encode_service_event_list_for_test(service: &ServiceInfo, event: &EventInfo) -> Vec<u8> {
+pub fn encode_reserve_list_for_test(reserves: &[ReserveData]) -> Vec<u8> {
     let mut writer = Writer::new();
-    writer.write_vector(&[(service, event)], |writer, (service, event)| {
+    writer.write_u16(5);
+    writer.write_vector(reserves, write_reserve_data);
+    writer.into_inner()
+}
+
+#[doc(hidden)]
+pub fn encode_service_event_list_for_test(service: &ServiceInfo, event: &EventInfo) -> Vec<u8> {
+    encode_service_event_lists_for_test(&[(service.clone(), vec![event.clone()])])
+}
+
+#[doc(hidden)]
+pub fn encode_service_event_lists_for_test(
+    service_events: &[(ServiceInfo, Vec<EventInfo>)],
+) -> Vec<u8> {
+    let mut writer = Writer::new();
+    writer.write_vector(service_events, |writer, (service, events)| {
         writer.write_struct(|writer| {
             write_service_info(writer, service);
-            writer.write_vector(std::slice::from_ref(event), |writer, event| {
+            writer.write_vector(events, |writer, event| {
                 write_event_info_for_test(writer, event)
             });
         });

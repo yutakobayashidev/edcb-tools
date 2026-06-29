@@ -1,8 +1,9 @@
 use std::time::Duration;
 
+use chrono::DateTime;
 use edcb_tools::{
-    BroadcastType, EventKey, PluginKind, ProgramSearchQuery, RecordingMode, SearchDateInfo,
-    ServiceKey, ServiceRecordingMode,
+    BroadcastType, ChannelType, EventKey, PluginKind, ProgramSearchQuery, RecordingMode,
+    SearchDateInfo, ServiceKey, ServiceRecordingMode, TimeTableQuery,
     cli::{CliAction, CliCommand, CliInvocation, OutputMode, format_services_plain},
     types::ServiceInfo,
 };
@@ -183,6 +184,54 @@ fn parses_extended_program_search_conditions() {
                 duration_min: Some(30),
                 duration_max: Some(120),
                 broadcast_type: BroadcastType::FreeOnly,
+            }),
+        })
+    );
+}
+
+#[test]
+fn parses_program_timetable_command() {
+    let action = CliAction::from_args_and_env(
+        [
+            "edcb",
+            "--json",
+            "programs",
+            "timetable",
+            "--service",
+            "32736:32736:1024",
+            "--start-time",
+            "2026-06-29T19:00:00+09:00",
+            "--end-time",
+            "2026-06-29T23:00:00+09:00",
+            "--channel-type",
+            "gr",
+        ],
+        empty_env(),
+    )
+    .expect("program timetable command should parse");
+
+    assert_eq!(
+        action,
+        CliAction::Run(CliInvocation {
+            host: "127.0.0.1".to_string(),
+            port: 4510,
+            timeout: Duration::from_secs(15),
+            output: OutputMode::Json,
+            command: CliCommand::ProgramsTimetable(TimeTableQuery {
+                start_time: Some(
+                    DateTime::parse_from_rfc3339("2026-06-29T19:00:00+09:00")
+                        .expect("test start time should parse")
+                ),
+                end_time: Some(
+                    DateTime::parse_from_rfc3339("2026-06-29T23:00:00+09:00")
+                        .expect("test end time should parse")
+                ),
+                channel_type: Some(ChannelType::Gr),
+                services: vec![ServiceKey {
+                    onid: 32736,
+                    tsid: 32736,
+                    sid: 1024,
+                }],
             }),
         })
     );

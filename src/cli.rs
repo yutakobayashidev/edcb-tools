@@ -2,11 +2,13 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
+use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
 
 use crate::{
-    BroadcastType, EdcbClient, EventKey, PluginKind, PostRecordingMode, ProgramSearchQuery,
-    RecordSettingsPatch, RecordingMode, SearchDateInfo, ServiceKey, ServiceRecordingMode, flows,
+    BroadcastType, ChannelType, EdcbClient, EventKey, PluginKind, PostRecordingMode,
+    ProgramSearchQuery, RecordSettingsPatch, RecordingMode, SearchDateInfo, ServiceKey,
+    ServiceRecordingMode, TimeTable, TimeTableQuery, flows,
     types::{
         EventInfo, NotifySrvInfo, RecFileInfo, ReserveData, ServiceInfo, TunerProcessStatusInfo,
         TunerReserveInfo,
@@ -29,6 +31,7 @@ pub enum CliCommand {
     RecordedList,
     RecordedGet(i32),
     ProgramsSearch(ProgramSearchQuery),
+    ProgramsTimetable(TimeTableQuery),
     ReserveGet(i32),
     ReservePreview {
         event_key: EventKey,
@@ -180,7 +183,8 @@ where
             "--plain" => invocation.output = OutputMode::Plain,
             "--keyword" | "--exclude-keyword" | "--service" | "--date-range" | "--duration-min"
             | "--duration-max" | "--free-ca" | "--event" | "--priority" | "--recording-mode"
-            | "--start-margin" | "--end-margin" | "--caption" | "--data" | "--post-recording" => {
+            | "--start-margin" | "--end-margin" | "--caption" | "--data" | "--post-recording"
+            | "--start-time" | "--end-time" | "--channel-type" => {
                 let key = args[index].clone();
                 index += 1;
                 let value = args
@@ -227,6 +231,11 @@ fn parse_command(positionals: &[String]) -> Result<CliCommand, CliError> {
         }
         [command, subcommand, rest @ ..] if command == "programs" && subcommand == "search" => {
             Ok(CliCommand::ProgramsSearch(parse_program_search(rest)?))
+        }
+        [command, subcommand, rest @ ..] if command == "programs" && subcommand == "timetable" => {
+            Ok(CliCommand::ProgramsTimetable(parse_program_timetable(
+                rest,
+            )?))
         }
         [command, subcommand, rest @ ..] if command == "reserves" && subcommand == "preview" => {
             let (event_key, options) = parse_event_and_options(rest)?;
@@ -344,6 +353,43 @@ fn parse_program_search(args: &[String]) -> Result<ProgramSearchQuery, CliError>
             value => {
                 return Err(CliError::invalid_usage(format!(
                     "unknown programs search argument {value}"
+                )));
+            }
+        }
+        index += 1;
+    }
+    Ok(query)
+}
+
+fn parse_program_timetable(args: &[String]) -> Result<TimeTableQuery, CliError> {
+    let mut query = TimeTableQuery::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--service" => {
+                index += 1;
+                query
+                    .services
+                    .push(parse_service_key(args.get(index).ok_or_else(|| {
+                        CliError::invalid_usage("--service requires onid:tsid:sid")
+                    })?)?);
+            }
+            "--start-time" => {
+                index += 1;
+                query.start_time = Some(parse_datetime_arg(args.get(index), "--start-time")?);
+            }
+            "--end-time" => {
+                index += 1;
+                query.end_time = Some(parse_datetime_arg(args.get(index), "--end-time")?);
+            }
+            "--channel-type" => {
+                index += 1;
+                query.channel_type =
+                    Some(parse_channel_type_arg(args.get(index), "--channel-type")?);
+            }
+            value => {
+                return Err(CliError::invalid_usage(format!(
+                    "unknown programs timetable argument {value}"
                 )));
             }
         }
@@ -485,6 +531,23 @@ fn parse_broadcast_type_arg(value: Option<&String>, name: &str) -> Result<Broadc
         .map_err(CliError::invalid_usage)
 }
 
+fn parse_channel_type_arg(value: Option<&String>, name: &str) -> Result<ChannelType, CliError> {
+    value
+        .ok_or_else(|| CliError::invalid_usage(format!("{name} requires a value")))?
+        .parse()
+        .map_err(CliError::invalid_usage)
+}
+
+fn parse_datetime_arg(
+    value: Option<&String>,
+    name: &str,
+) -> Result<DateTime<FixedOffset>, CliError> {
+    DateTime::parse_from_rfc3339(
+        value.ok_or_else(|| CliError::invalid_usage(format!("{name} requires a value")))?,
+    )
+    .map_err(|_| CliError::invalid_usage(format!("{name} must be RFC 3339 datetime")))
+}
+
 fn parse_search_date_range(value: &str) -> Result<SearchDateInfo, CliError> {
     let (start, end) = value.split_once('-').ok_or_else(|| {
         CliError::invalid_usage(format!(
@@ -615,6 +678,14 @@ pub async fn execute(invocation: CliInvocation) -> Result<String, CliError> {
                 .map_err(runtime_error)?;
             render(&invocation.output, &value, || format_programs_plain(&value))
         }
+        CliCommand::ProgramsTimetable(query) => {
+            let value = flows::get_timetable(&client, &query)
+                .await
+                .map_err(runtime_error)?;
+            render(&invocation.output, &value, || {
+                format_timetable_plain(&value)
+            })
+        }
         CliCommand::ReserveGet(reserve_id) => {
             let value = flows::get_reservation(&client, reserve_id)
                 .await
@@ -707,6 +778,72 @@ fn format_programs_plain(programs: &[EventInfo]) -> String {
             )
         })
         .collect()
+}
+
+fn format_timetable_plain(timetable: &TimeTable) -> String {
+    let mut output = String::new();
+    for channel in &timetable.channels {
+        push_timetable_program_lines(
+            &mut output,
+            &channel.service.service_name,
+            &channel.programs,
+        );
+        if let Some(subchannels) = &channel.subchannels {
+            for subchannel in subchannels {
+                push_timetable_program_lines(
+                    &mut output,
+                    &subchannel.service.service_name,
+                    &subchannel.programs,
+                );
+            }
+        }
+    }
+    output
+}
+
+fn push_timetable_program_lines(
+    output: &mut String,
+    service_name: &str,
+    programs: &[crate::TimeTableProgram],
+) {
+    for program in programs {
+        let event = &program.event;
+        let title = event
+            .short_info
+            .as_ref()
+            .map(|info| info.event_name.as_str())
+            .unwrap_or("");
+        let start = event
+            .start_time
+            .map(|time| time.to_rfc3339())
+            .unwrap_or_else(|| "-".to_string());
+        let duration = event
+            .duration_sec
+            .map(|duration| duration.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let reservation = program
+            .reservation
+            .as_ref()
+            .map(|reservation| {
+                format!(
+                    "{}:{:?}:{:?}",
+                    reservation.id, reservation.status, reservation.recording_availability
+                )
+            })
+            .unwrap_or_else(|| "-".to_string());
+        output.push_str(&format!(
+            "{}:{}:{}:{}\t{}\t{}\t{}\t{}\t{}\n",
+            event.onid,
+            event.tsid,
+            event.sid,
+            event.eid,
+            start,
+            duration,
+            service_name,
+            title,
+            reservation
+        ));
+    }
 }
 
 fn format_reservation_plain(reserve: &ReserveData) -> String {
@@ -844,6 +981,7 @@ USAGE:
   edcb [global flags] <command>
   edcb [global flags] recorded get <info-id>
   edcb [global flags] programs search [search options]
+  edcb [global flags] programs timetable [timetable options]
   edcb [global flags] reserves create --event <onid:tsid:sid:eid> [recording options] --yes
   edcb [global flags] reserves update <reserve-id> [recording options] --yes
   edcb [global flags] reserves delete <reserve-id> --yes
@@ -855,6 +993,7 @@ COMMANDS:
   recorded list
   recorded get <info-id>
   programs search [search options]
+  programs timetable [timetable options]
   reserves get <reserve-id>
   reserves preview --event <onid:tsid:sid:eid> [recording options]
   reserves create --event <onid:tsid:sid:eid> [recording options] --yes
@@ -888,6 +1027,12 @@ PROGRAM SEARCH OPTIONS:
       --duration-max <minutes>
       --free-ca <all|free|paid>
 
+TIMETABLE OPTIONS:
+      --service <onid:tsid:sid>          Repeatable
+      --start-time <RFC3339 datetime>
+      --end-time <RFC3339 datetime>
+      --channel-type <gr|bs|cs|catv|sky|bs4k>
+
 RECORDING OPTIONS:
       --priority <1-5>
       --enable | --disable
@@ -905,6 +1050,8 @@ EXAMPLES:
   edcb programs search --keyword ニュース --title-only
   edcb programs search --keyword ニュース --date-range 1:19:00-1:23:00
   edcb programs search --keyword ニュース --duration-min 30 --duration-max 120 --free-ca free
+  edcb programs timetable --channel-type gr
+  edcb programs timetable --service 32736:32736:1024 --start-time 2026-06-29T19:00:00+09:00 --end-time 2026-06-29T23:00:00+09:00
   edcb reserves get 1 --json
   edcb reserves preview --event 32736:32736:1024:4208
   edcb reserves create --event 32736:32736:1024:4208 --priority 4 --yes

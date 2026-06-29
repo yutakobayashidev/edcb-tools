@@ -2,20 +2,21 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
 
-use chrono::Timelike;
+use chrono::{Duration as ChronoDuration, Timelike};
 use edcb_tools::{
     BroadcastType, EdcbClient, EventKey, PostRecordingMode, ProgramSearchQuery,
-    RecordSettingsPatch, RecordingFolder, RecordingMode, SearchDateInfo, SearchKeyInfo, ServiceKey,
-    ServiceRecordingMode,
+    RecordSettingsPatch, RecordingAvailability, RecordingFolder, RecordingMode, SearchDateInfo,
+    SearchKeyInfo, ServiceKey, ServiceRecordingMode, TimeTableQuery,
     flows::{
         apply_record_settings_patch, build_reservation_from_event, create_reservation_with_options,
-        delete_reservation, preview_reservation, program_search_query_to_search_key,
+        delete_reservation, get_timetable, preview_reservation, program_search_query_to_search_key,
         search_programs, update_reservation,
     },
     test_support::{
-        encode_event_list_for_test, encode_reserve_for_test, encode_search_keys_for_test,
-        encode_service_event_list_for_test, read_request_frame_for_test, reserve_fixture_for_test,
-        service_event_fixture_for_test,
+        encode_event_list_for_test, encode_reserve_for_test, encode_reserve_list_for_test,
+        encode_search_keys_for_test, encode_service_event_list_for_test,
+        encode_service_event_lists_for_test, encode_services_for_test, read_request_frame_for_test,
+        reserve_fixture_for_test, service_event_fixture_for_test,
     },
 };
 use tokio::io::AsyncWriteExt;
@@ -393,6 +394,217 @@ async fn search_programs_uses_search_pg_for_specific_service() {
     assert_eq!(programs.len(), 1);
     assert_eq!(programs[0].eid, event.eid);
     assert_eq!(payload, encode_search_keys_for_test(&[expected_key]));
+}
+
+#[tokio::test]
+async fn timetable_groups_programs_and_attaches_reservations() {
+    let (service, event) = service_event_fixture_for_test();
+    let service_key = ServiceKey {
+        onid: service.onid,
+        tsid: service.tsid,
+        sid: service.sid,
+    };
+    let mut reserve = reserve_fixture_for_test();
+    reserve.reserve_id = 77;
+    reserve.onid = event.onid;
+    reserve.tsid = event.tsid;
+    reserve.sid = event.sid;
+    reserve.eid = event.eid;
+    reserve.start_time = event.start_time.expect("test event should have start time");
+    reserve.duration_second =
+        u32::try_from(event.duration_sec.expect("test event should have duration"))
+            .expect("test event duration should be non-negative");
+    reserve.overlap_mode = 1;
+    let (addr, server) = spawn_command_sequence_server(vec![
+        (
+            1021,
+            encode_services_for_test(std::slice::from_ref(&service)),
+        ),
+        (
+            1029,
+            encode_service_event_lists_for_test(&[(service.clone(), vec![event.clone()])]),
+        ),
+        (2011, encode_reserve_list_for_test(&[reserve])),
+    ])
+    .await;
+    let mut client = EdcbClient::new(addr.ip().to_string(), addr.port());
+    client.set_timeout(Duration::from_secs(1));
+
+    let timetable = get_timetable(
+        &client,
+        &TimeTableQuery {
+            services: vec![service_key],
+            ..TimeTableQuery::default()
+        },
+    )
+    .await
+    .expect("timetable should be built from EDCB EPG and reservations");
+    let payloads = server
+        .await
+        .expect("mock EDCB server task should complete without panicking");
+    let enum_pg_payload = &payloads[1];
+
+    assert_eq!(read_i64_at(enum_pg_payload, 8), 0);
+    assert_eq!(read_i64_at(enum_pg_payload, 16), service_key.to_search_id());
+    assert_eq!(timetable.channels.len(), 1);
+    assert_eq!(timetable.channels[0].service.sid, service.sid);
+    assert_eq!(timetable.channels[0].programs.len(), 1);
+    assert_eq!(timetable.channels[0].programs[0].event.eid, event.eid);
+    let reservation = timetable.channels[0].programs[0]
+        .reservation
+        .as_ref()
+        .expect("matching reservation should attach");
+    assert_eq!(reservation.id, 77);
+    assert_eq!(
+        reservation.recording_availability,
+        RecordingAvailability::Partial
+    );
+    assert_eq!(
+        timetable.date_range.earliest,
+        event.start_time.expect("test event should have start time")
+    );
+}
+
+#[tokio::test]
+async fn timetable_groups_short_subchannels_under_main_channel() {
+    let (mut main_service, mut main_event) = service_event_fixture_for_test();
+    main_service.sid = 3;
+    main_service.service_name = "Main".to_string();
+    main_event.sid = main_service.sid;
+    let mut sub_service = main_service.clone();
+    sub_service.sid = 4;
+    sub_service.service_name = "Sub".to_string();
+    let mut sub_event = main_event.clone();
+    sub_event.sid = sub_service.sid;
+    sub_event.eid = 5;
+    sub_event.start_time = Some(
+        main_event
+            .start_time
+            .expect("test event should have start time")
+            + ChronoDuration::hours(1),
+    );
+    let (addr, server) = spawn_command_sequence_server(vec![
+        (
+            1021,
+            encode_services_for_test(&[main_service.clone(), sub_service.clone()]),
+        ),
+        (
+            1029,
+            encode_service_event_lists_for_test(&[
+                (main_service.clone(), vec![main_event.clone()]),
+                (sub_service.clone(), vec![sub_event.clone()]),
+            ]),
+        ),
+        (2011, encode_reserve_list_for_test(&[])),
+    ])
+    .await;
+    let mut client = EdcbClient::new(addr.ip().to_string(), addr.port());
+    client.set_timeout(Duration::from_secs(1));
+
+    let timetable = get_timetable(&client, &TimeTableQuery::default())
+        .await
+        .expect("timetable should group subchannels");
+    server
+        .await
+        .expect("mock EDCB server task should complete without panicking");
+
+    assert_eq!(timetable.channels.len(), 1);
+    assert_eq!(timetable.channels[0].service.sid, main_service.sid);
+    assert_eq!(timetable.channels[0].programs.len(), 1);
+    let subchannels = timetable.channels[0]
+        .subchannels
+        .as_ref()
+        .expect("short subchannel should be nested");
+    assert_eq!(subchannels.len(), 1);
+    assert_eq!(subchannels[0].service.sid, sub_service.sid);
+    assert_eq!(subchannels[0].programs[0].event.eid, sub_event.eid);
+}
+
+#[tokio::test]
+async fn timetable_attaches_reservation_by_time_overlap_when_event_id_differs() {
+    let (service, event) = service_event_fixture_for_test();
+    let mut reserve = reserve_fixture_for_test();
+    reserve.reserve_id = 78;
+    reserve.onid = event.onid;
+    reserve.tsid = event.tsid;
+    reserve.sid = event.sid;
+    reserve.eid = event.eid + 1;
+    reserve.start_time =
+        event.start_time.expect("test event should have start time") + ChronoDuration::minutes(10);
+    reserve.duration_second = 600;
+
+    let (addr, server) = spawn_command_sequence_server(vec![
+        (
+            1021,
+            encode_services_for_test(std::slice::from_ref(&service)),
+        ),
+        (
+            1029,
+            encode_service_event_lists_for_test(&[(service.clone(), vec![event.clone()])]),
+        ),
+        (2011, encode_reserve_list_for_test(&[reserve])),
+    ])
+    .await;
+    let mut client = EdcbClient::new(addr.ip().to_string(), addr.port());
+    client.set_timeout(Duration::from_secs(1));
+
+    let timetable = get_timetable(&client, &TimeTableQuery::default())
+        .await
+        .expect("timetable should attach overlapping reservation metadata");
+    server
+        .await
+        .expect("mock EDCB server task should complete without panicking");
+
+    let reservation = timetable.channels[0].programs[0]
+        .reservation
+        .as_ref()
+        .expect("overlapping reservation should attach even when event id differs");
+    assert_eq!(reservation.id, 78);
+}
+
+#[tokio::test]
+async fn timetable_keeps_long_subchannels_as_independent_channels() {
+    let (mut main_service, mut main_event) = service_event_fixture_for_test();
+    main_service.sid = 3;
+    main_service.service_name = "Main".to_string();
+    main_event.sid = main_service.sid;
+    let mut sub_service = main_service.clone();
+    sub_service.sid = 4;
+    sub_service.service_name = "Long Sub".to_string();
+    let mut sub_event = main_event.clone();
+    sub_event.sid = sub_service.sid;
+    sub_event.eid = 6;
+    sub_event.duration_sec = Some(8 * 60 * 60);
+    let (addr, server) = spawn_command_sequence_server(vec![
+        (
+            1021,
+            encode_services_for_test(&[main_service.clone(), sub_service.clone()]),
+        ),
+        (
+            1029,
+            encode_service_event_lists_for_test(&[
+                (main_service.clone(), vec![main_event.clone()]),
+                (sub_service.clone(), vec![sub_event.clone()]),
+            ]),
+        ),
+        (2011, encode_reserve_list_for_test(&[])),
+    ])
+    .await;
+    let mut client = EdcbClient::new(addr.ip().to_string(), addr.port());
+    client.set_timeout(Duration::from_secs(1));
+
+    let timetable = get_timetable(&client, &TimeTableQuery::default())
+        .await
+        .expect("timetable should keep long subchannels independent");
+    server
+        .await
+        .expect("mock EDCB server task should complete without panicking");
+
+    assert_eq!(timetable.channels.len(), 2);
+    assert_eq!(timetable.channels[0].service.sid, main_service.sid);
+    assert_eq!(timetable.channels[0].subchannels, None);
+    assert_eq!(timetable.channels[1].service.sid, sub_service.sid);
+    assert_eq!(timetable.channels[1].programs[0].event.eid, sub_event.eid);
 }
 
 #[tokio::test]

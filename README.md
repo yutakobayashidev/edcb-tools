@@ -65,9 +65,9 @@ edcb-tools = { git = "https://github.com/yutakobayashidev/edcb-tools" }
 - EDCB primitive, string, vector, struct, and `SYSTEMTIME` codec
 - Service, EPG, reserve, recorded-file, tuner, plugin, auto-add, manual-add,
   and notify-status read APIs
-- Program search, recorded item detail retrieval, reservation detail retrieval,
-  and event-based reservation preview/create/update/delete with recording
-  options
+- Program search, timetable retrieval, recorded item detail retrieval,
+  reservation detail retrieval, and event-based reservation
+  preview/create/update/delete with recording options
 - Utility parsers for `ChSet5.txt`, `LogoData.ini`, logo directory indexes, and
   program extended text
 
@@ -141,6 +141,7 @@ Available commands:
 - `recorded list`
 - `recorded get <info-id>`
 - `programs search [search options]`
+- `programs timetable [timetable options]`
 - `reserves get <reserve-id>`
 - `reserves preview --event <onid:tsid:sid:eid> [recording options]`
 - `reserves create --event <onid:tsid:sid:eid> [recording options] --yes`
@@ -166,6 +167,8 @@ to `reserves preview` or `reserves create`.
 Program search uses EDCB's `SearchKeyInfo`/`SearchPg` semantics. Date ranges are
 recurring weekday/time-of-day ranges, not absolute datetimes. If no service is
 specified, the CLI first fetches EDCB's service list and searches those services.
+Use `programs timetable` when you want the program table for services/time
+windows instead of keyword search.
 
 Program search options:
 
@@ -187,6 +190,24 @@ Examples:
 edcb programs search --keyword news --title-only
 edcb programs search --keyword news --date-range 1:19:00-1:23:00
 edcb programs search --keyword news --duration-min 30 --duration-max 120 --free-ca free
+```
+
+Program timetable uses EDCB's `EnumPgInfoEx` semantics. It returns programs
+grouped by service, nests short same-TS subchannels under their main channel,
+and attaches reservation metadata when a matching reservation can be found.
+
+Timetable options:
+
+- `--service <onid:tsid:sid>` (repeatable)
+- `--start-time <RFC3339 datetime>`
+- `--end-time <RFC3339 datetime>`
+- `--channel-type <gr|bs|cs|catv|sky|bs4k>`
+
+Examples:
+
+```sh
+edcb programs timetable --channel-type gr
+edcb programs timetable --service 32736:32736:1024 --start-time 2026-06-29T19:00:00+09:00 --end-time 2026-06-29T23:00:00+09:00
 ```
 
 Common recording options:
@@ -229,6 +250,7 @@ Exposed MCP tools:
 - `list_recorded`
 - `get_recorded_info`
 - `search_programs`
+- `get_timetable`
 - `preview_reservation`
 - `create_reservation`
 - `update_reservation`
@@ -289,6 +311,24 @@ deleted reservation data.
   "duration_range_min": 30,
   "duration_range_max": 120,
   "broadcast_type": "FreeOnly"
+}
+```
+
+`get_timetable` accepts service/time/channel filters and returns channels with
+programs, optional nested subchannels, and best-effort reservation metadata:
+
+```json
+{
+  "start_time": "2026-06-29T19:00:00+09:00",
+  "end_time": "2026-06-29T23:00:00+09:00",
+  "channel_type": "GR",
+  "services": [
+    {
+      "network_id": 32736,
+      "transport_stream_id": 32736,
+      "service_id": 1024
+    }
+  ]
 }
 ```
 

@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::{
-    BroadcastType, EdcbClient, EventKey, PluginKind, ProgramSearchQuery, RecordSettingsPatch,
-    SearchDateInfo, ServiceKey, flows,
+    BroadcastType, ChannelType, EdcbClient, EventKey, PluginKind, ProgramSearchQuery,
+    RecordSettingsPatch, SearchDateInfo, ServiceKey, TimeTableQuery, flows,
 };
+use chrono::{DateTime, FixedOffset};
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -252,6 +253,41 @@ impl SearchProgramsDateParam {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetTimetableParam {
+    pub start_time: Option<DateTime<FixedOffset>>,
+    pub end_time: Option<DateTime<FixedOffset>>,
+    pub channel_type: Option<ChannelType>,
+    pub services: Option<Vec<SearchProgramsServiceParam>>,
+}
+
+impl GetTimetableParam {
+    pub fn try_into_query(&self) -> Result<TimeTableQuery, String> {
+        let services = self
+            .services
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .map(|service| ServiceKey {
+                onid: service.network_id,
+                tsid: service.transport_stream_id,
+                sid: service.service_id,
+            })
+            .collect();
+        if let (Some(start), Some(end)) = (self.start_time, self.end_time)
+            && end <= start
+        {
+            return Err("timetable end_time must be later than start_time".to_string());
+        }
+        Ok(TimeTableQuery {
+            start_time: self.start_time,
+            end_time: self.end_time,
+            channel_type: self.channel_type,
+            services,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReservationEventParam {
     pub event: String,
     pub options: Option<RecordSettingsPatch>,
@@ -352,6 +388,19 @@ impl EdcbMcpServer {
         let query = params.try_into_query()?;
         let client = self.client();
         to_call_tool_result(flows::search_programs(&client, &query).await)
+    }
+
+    #[tool(
+        name = "get_timetable",
+        description = "Get EDCB timetable programs grouped by service with optional channel/service/time filters"
+    )]
+    pub async fn get_timetable(
+        &self,
+        Parameters(params): Parameters<GetTimetableParam>,
+    ) -> Result<CallToolResult, String> {
+        let query = params.try_into_query()?;
+        let client = self.client();
+        to_call_tool_result(flows::get_timetable(&client, &query).await)
     }
 
     #[tool(

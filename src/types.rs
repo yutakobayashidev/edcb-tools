@@ -4,7 +4,7 @@ use chrono::{DateTime, FixedOffset};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct ServiceKey {
     pub onid: u16,
     pub tsid: u16,
@@ -30,6 +30,40 @@ impl FromStr for ServiceKey {
             tsid: parse_key_part(parts[1], "tsid")?,
             sid: parse_key_part(parts[2], "sid")?,
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ChannelType {
+    #[serde(rename = "GR")]
+    Gr,
+    #[serde(rename = "BS")]
+    Bs,
+    #[serde(rename = "CS")]
+    Cs,
+    #[serde(rename = "CATV")]
+    Catv,
+    #[serde(rename = "SKY")]
+    Sky,
+    #[serde(rename = "BS4K")]
+    Bs4k,
+}
+
+impl FromStr for ChannelType {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match normalize_option(value).as_str() {
+            "gr" => Ok(Self::Gr),
+            "bs" => Ok(Self::Bs),
+            "cs" => Ok(Self::Cs),
+            "catv" => Ok(Self::Catv),
+            "sky" => Ok(Self::Sky),
+            "bs4k" => Ok(Self::Bs4k),
+            _ => Err(format!(
+                "channel type must be gr, bs, cs, catv, sky, or bs4k: {value}"
+            )),
+        }
     }
 }
 
@@ -397,6 +431,68 @@ pub struct EventInfo {
 pub struct ServiceEventInfo {
     pub service_info: ServiceInfo,
     pub event_list: Vec<EventInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct TimeTableQuery {
+    pub start_time: Option<DateTime<FixedOffset>>,
+    pub end_time: Option<DateTime<FixedOffset>>,
+    pub channel_type: Option<ChannelType>,
+    pub services: Vec<ServiceKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimeTable {
+    pub channels: Vec<TimeTableChannel>,
+    pub date_range: TimeTableDateRange,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimeTableDateRange {
+    pub earliest: DateTime<FixedOffset>,
+    pub latest: DateTime<FixedOffset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimeTableChannel {
+    pub service: ServiceInfo,
+    pub programs: Vec<TimeTableProgram>,
+    pub subchannels: Option<Vec<TimeTableSubchannel>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimeTableSubchannel {
+    pub service: ServiceInfo,
+    pub programs: Vec<TimeTableProgram>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TimeTableProgram {
+    pub event: EventInfo,
+    pub reservation: Option<TimeTableProgramReservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TimeTableProgramReservation {
+    pub id: i32,
+    pub status: ReservationStatus,
+    pub recording_availability: RecordingAvailability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum ReservationStatus {
+    Reserved,
+    Recording,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum RecordingAvailability {
+    Full,
+    Partial,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]

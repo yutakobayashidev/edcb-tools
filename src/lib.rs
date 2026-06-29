@@ -13,7 +13,9 @@ mod codec;
 pub use client::{EdcbClient, PluginKind};
 pub use error::{EdcbError, Result};
 pub use types::{
-    BroadcastType, EventKey, PostRecordingMode, ProgramSearchQuery, RecordSettingsPatch,
-    RecordingFolder, RecordingMode, SearchDateInfo, SearchKeyInfo, ServiceKey,
-    ServiceRecordingMode,
+    BroadcastType, ChannelType, EventKey, PostRecordingMode, ProgramSearchQuery,
+    RecordSettingsPatch, RecordingAvailability, RecordingFolder, RecordingMode, ReservationStatus,
+    SearchDateInfo, SearchKeyInfo, ServiceKey, ServiceRecordingMode, TimeTable, TimeTableChannel,
+    TimeTableDateRange, TimeTableProgram, TimeTableProgramReservation, TimeTableQuery,
+    TimeTableSubchannel,
 };
