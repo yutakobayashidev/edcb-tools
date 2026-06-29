@@ -157,12 +157,45 @@ fn parses_reservation_preview_and_create_commands() {
 }
 
 #[test]
+fn parses_reservation_get_and_delete_commands() {
+    let get = CliAction::from_args_and_env(["edcb", "reserves", "get", "42"], empty_env())
+        .expect("reservation get command should parse");
+    let delete =
+        CliAction::from_args_and_env(["edcb", "reserves", "delete", "42", "--yes"], empty_env())
+            .expect("reservation delete command should parse");
+
+    assert!(matches!(
+        get,
+        CliAction::Run(CliInvocation {
+            command: CliCommand::ReserveGet(42),
+            ..
+        })
+    ));
+    assert!(matches!(
+        delete,
+        CliAction::Run(CliInvocation {
+            command: CliCommand::ReserveDelete(42),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn reserve_create_requires_confirmation() {
     let error = CliAction::from_args_and_env(
         ["edcb", "reserves", "create", "--event", "1:2:3:4"],
         empty_env(),
     )
     .expect_err("reservation creation should require --yes");
+
+    assert_eq!(error.exit_code, 2);
+    assert!(error.message.contains("--yes"));
+}
+
+#[test]
+fn reserve_delete_requires_confirmation() {
+    let error = CliAction::from_args_and_env(["edcb", "reserves", "delete", "42"], empty_env())
+        .expect_err("reservation deletion should require --yes");
 
     assert_eq!(error.exit_code, 2);
     assert!(error.message.contains("--yes"));

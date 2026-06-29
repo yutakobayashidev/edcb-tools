@@ -150,6 +150,20 @@ impl EdcbClient {
         Ok(())
     }
 
+    pub async fn delete_reserve(&self, reserve_id: i32) -> Result<()> {
+        self.delete_reserves(&[reserve_id]).await
+    }
+
+    pub async fn delete_reserves(&self, reserve_ids: &[i32]) -> Result<()> {
+        self.send_cmd(CMD_EPG_SRV_DEL_RESERVE, |writer| {
+            writer.write_vector(reserve_ids, |writer, reserve_id| {
+                writer.write_i32(*reserve_id)
+            })
+        })
+        .await?;
+        Ok(())
+    }
+
     pub async fn enum_rec_info_basic(&self) -> Result<Vec<RecFileInfo>> {
         let body = self
             .send_cmd2(CMD_EPG_SRV_ENUM_RECINFO_BASIC2, |_| {})

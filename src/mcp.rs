@@ -116,6 +116,11 @@ pub struct RecordedInfoParam {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReservationIdParam {
+    pub reserve_id: i32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PluginKindParam {
     pub kind: String,
 }
@@ -210,6 +215,18 @@ impl EdcbMcpServer {
         to_call_tool_result(self.client().enum_reserve().await)
     }
 
+    #[tool(
+        name = "get_reservation",
+        description = "Get one EDCB reservation by reserve ID"
+    )]
+    pub async fn get_reservation(
+        &self,
+        Parameters(params): Parameters<ReservationIdParam>,
+    ) -> Result<CallToolResult, String> {
+        let client = self.client();
+        to_call_tool_result(flows::get_reservation(&client, params.reserve_id).await)
+    }
+
     #[tool(name = "list_recorded", description = "List EDCB recorded file info")]
     pub async fn list_recorded(&self) -> Result<CallToolResult, String> {
         to_call_tool_result(self.client().enum_rec_info_basic().await)
@@ -263,6 +280,18 @@ impl EdcbMcpServer {
         let event_key = params.try_into_event_key()?;
         let client = self.client();
         to_call_tool_result(flows::create_reservation(&client, event_key).await)
+    }
+
+    #[tool(
+        name = "delete_reservation",
+        description = "Delete one EDCB reservation by reserve ID after fetching it"
+    )]
+    pub async fn delete_reservation(
+        &self,
+        Parameters(params): Parameters<ReservationIdParam>,
+    ) -> Result<CallToolResult, String> {
+        let client = self.client();
+        to_call_tool_result(flows::delete_reservation(&client, params.reserve_id).await)
     }
 
     #[tool(

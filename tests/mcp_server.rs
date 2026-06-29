@@ -140,8 +140,10 @@ fn mcp_server_exposes_v1_tools() {
         tool_names,
         vec![
             "create_reservation",
+            "delete_reservation",
             "get_notify_status",
             "get_recorded_info",
+            "get_reservation",
             "list_plugins",
             "list_recorded",
             "list_reserves",

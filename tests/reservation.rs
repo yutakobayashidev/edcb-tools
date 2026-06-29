@@ -5,7 +5,9 @@ use std::time::Duration;
 use chrono::Timelike;
 use edcb_mcp::{
     EdcbClient, EventKey, ProgramSearchQuery, ServiceKey,
-    flows::{build_reservation_from_event, preview_reservation, search_programs},
+    flows::{
+        build_reservation_from_event, delete_reservation, preview_reservation, search_programs,
+    },
     test_support::{
         encode_reserve_for_test, encode_service_event_list_for_test, read_request_frame_for_test,
         reserve_fixture_for_test, service_event_fixture_for_test,
@@ -305,6 +307,33 @@ async fn add_reserve_sends_versioned_reserve_vector() {
             .windows(title_bytes.len())
             .any(|window| window == title_bytes)
     );
+}
+
+#[tokio::test]
+async fn delete_reservation_fetches_existing_reserve_then_sends_delete() {
+    let reserve = reserve_fixture_for_test();
+    let (addr, server) =
+        spawn_two_command_server(2012, encode_reserve_for_test(&reserve), 1014, Vec::new()).await;
+    let mut client = EdcbClient::new(addr.ip().to_string(), addr.port());
+    client.set_timeout(Duration::from_secs(1));
+
+    let deleted = delete_reservation(&client, reserve.reserve_id)
+        .await
+        .expect("reservation delete should return the deleted reservation");
+    let payloads = server
+        .await
+        .expect("mock EDCB server task should complete without panicking");
+
+    assert_eq!(deleted.reserve_id, reserve.reserve_id);
+    assert_eq!(&payloads[0][0..2], &5_u16.to_le_bytes());
+    assert_eq!(
+        &payloads[0][2..6],
+        &reserve.reserve_id.to_le_bytes(),
+        "flow should fetch the existing reservation before deleting it"
+    );
+    assert_eq!(read_i32_at(&payloads[1], 0), 12);
+    assert_eq!(read_i32_at(&payloads[1], 4), 1);
+    assert_eq!(read_i32_at(&payloads[1], 8), reserve.reserve_id);
 }
 
 #[test]

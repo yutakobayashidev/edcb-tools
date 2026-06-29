@@ -20,6 +20,16 @@ pub async fn search_programs(
         .collect())
 }
 
+pub async fn get_reservation(client: &EdcbClient, reserve_id: i32) -> Result<ReserveData> {
+    client.get_reserve(reserve_id).await
+}
+
+pub async fn delete_reservation(client: &EdcbClient, reserve_id: i32) -> Result<ReserveData> {
+    let reserve = get_reservation(client, reserve_id).await?;
+    client.delete_reserve(reserve_id).await?;
+    Ok(reserve)
+}
+
 pub async fn preview_reservation(client: &EdcbClient, event_key: EventKey) -> Result<ReserveData> {
     let (service, event) = find_event(client, event_key).await?;
     let default = client.get_default_reserve().await?;

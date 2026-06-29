@@ -28,8 +28,10 @@ pub enum CliCommand {
     RecordedList,
     RecordedGet(i32),
     ProgramsSearch(ProgramSearchQuery),
+    ReserveGet(i32),
     ReservePreview(EventKey),
     ReserveCreate(EventKey),
+    ReserveDelete(i32),
     TunerReserves,
     TunerProcesses,
     Plugins(PluginKind),
@@ -209,6 +211,9 @@ fn parse_command(positionals: &[String]) -> Result<CliCommand, CliError> {
         [command, subcommand, rest @ ..] if command == "reserves" && subcommand == "preview" => {
             Ok(CliCommand::ReservePreview(parse_event_arg(rest)?))
         }
+        [command, subcommand, reserve_id] if command == "reserves" && subcommand == "get" => {
+            Ok(CliCommand::ReserveGet(parse_reserve_id(reserve_id)?))
+        }
         [command, subcommand, rest @ ..] if command == "reserves" && subcommand == "create" => {
             let event_key = parse_event_arg(rest)?;
             if !rest.iter().any(|value| value == "--yes") {
@@ -217,6 +222,22 @@ fn parse_command(positionals: &[String]) -> Result<CliCommand, CliError> {
                 ));
             }
             Ok(CliCommand::ReserveCreate(event_key))
+        }
+        [command, subcommand, reserve_id, rest @ ..]
+            if command == "reserves" && subcommand == "delete" =>
+        {
+            let reserve_id = parse_reserve_id(reserve_id)?;
+            if let Some(value) = rest.iter().find(|value| value.as_str() != "--yes") {
+                return Err(CliError::invalid_usage(format!(
+                    "unknown reservation argument {value}"
+                )));
+            }
+            if !rest.iter().any(|value| value == "--yes") {
+                return Err(CliError::invalid_usage(
+                    "reserves delete requires --yes to confirm mutation",
+                ));
+            }
+            Ok(CliCommand::ReserveDelete(reserve_id))
         }
         [command, kind] if command == "plugins" => {
             Ok(CliCommand::Plugins(parse_plugin_kind(kind)?))
@@ -297,6 +318,12 @@ fn parse_event_key(value: &str) -> Result<EventKey, CliError> {
     value.parse().map_err(CliError::invalid_usage)
 }
 
+fn parse_reserve_id(value: &str) -> Result<i32, CliError> {
+    value
+        .parse()
+        .map_err(|_| CliError::invalid_usage(format!("reserve-id must be an integer: {value}")))
+}
+
 fn parse_plugin_kind(value: &str) -> Result<PluginKind, CliError> {
     match value {
         "write" => Ok(PluginKind::Write),
@@ -353,6 +380,14 @@ pub async fn execute(invocation: CliInvocation) -> Result<String, CliError> {
                 .map_err(runtime_error)?;
             render(&invocation.output, &value, || format_programs_plain(&value))
         }
+        CliCommand::ReserveGet(reserve_id) => {
+            let value = flows::get_reservation(&client, reserve_id)
+                .await
+                .map_err(runtime_error)?;
+            render(&invocation.output, &value, || {
+                format_reservation_plain(&value)
+            })
+        }
         CliCommand::ReservePreview(event_key) => {
             let value = flows::preview_reservation(&client, event_key)
                 .await
@@ -363,6 +398,14 @@ pub async fn execute(invocation: CliInvocation) -> Result<String, CliError> {
         }
         CliCommand::ReserveCreate(event_key) => {
             let value = flows::create_reservation(&client, event_key)
+                .await
+                .map_err(runtime_error)?;
+            render(&invocation.output, &value, || {
+                format_reservation_plain(&value)
+            })
+        }
+        CliCommand::ReserveDelete(reserve_id) => {
+            let value = flows::delete_reservation(&client, reserve_id)
                 .await
                 .map_err(runtime_error)?;
             render(&invocation.output, &value, || {
@@ -556,6 +599,7 @@ USAGE:
   edcb [global flags] recorded get <info-id>
   edcb [global flags] programs search --keyword <text>
   edcb [global flags] reserves create --event <onid:tsid:sid:eid> --yes
+  edcb [global flags] reserves delete <reserve-id> --yes
   edcb [global flags] plugins <write|rec_name>
 
 COMMANDS:
@@ -564,8 +608,10 @@ COMMANDS:
   recorded list
   recorded get <info-id>
   programs search --keyword <text> [--title-only] [--service <onid:tsid:sid>]
+  reserves get <reserve-id>
   reserves preview --event <onid:tsid:sid:eid>
   reserves create --event <onid:tsid:sid:eid> --yes
+  reserves delete <reserve-id> --yes
   tuner-reserves
   tuner-processes
   plugins <write|rec_name>
@@ -587,8 +633,10 @@ EXAMPLES:
   edcb recorded list
   edcb recorded get 1 --json
   edcb programs search --keyword ニュース --title-only
+  edcb reserves get 1 --json
   edcb reserves preview --event 32736:32736:1024:4208
   edcb reserves create --event 32736:32736:1024:4208 --yes
+  edcb reserves delete 1 --yes
   edcb plugins write
   edcb --host 172.18.0.7 notify-status
 "
