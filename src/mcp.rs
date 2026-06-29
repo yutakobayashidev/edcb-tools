@@ -7,6 +7,7 @@ use crate::{
     TimeTableQuery, flows,
 };
 use chrono::{DateTime, FixedOffset};
+use clap::{Parser, error::ErrorKind, value_parser};
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -15,11 +16,20 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub timeout: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerConfigAction {
+    Run(ServerConfig),
+    Help(String),
+    Version(String),
 }
 
 impl Default for ServerConfig {
@@ -32,7 +42,7 @@ impl Default for ServerConfig {
     }
 }
 
-impl ServerConfig {
+impl ServerConfigAction {
     pub fn from_env_args() -> Result<Self, String> {
         Self::from_args_and_env(std::env::args(), std::env::vars())
     }
@@ -49,8 +59,78 @@ impl ServerConfig {
             .into_iter()
             .map(|(key, value)| (key.as_ref().to_string(), value.as_ref().to_string()))
             .collect();
+        let args: Vec<String> = args
+            .into_iter()
+            .map(|arg| arg.as_ref().to_string())
+            .collect();
+        let raw = match RawServerConfig::try_parse_from(args) {
+            Ok(raw) => raw,
+            Err(error) => match error.kind() {
+                ErrorKind::DisplayHelp => return Ok(Self::Help(error.to_string())),
+                ErrorKind::DisplayVersion => return Ok(Self::Version(error.to_string())),
+                _ => return Err(clap_error_message(error)),
+            },
+        };
 
-        let mut config = Self::default();
+        Ok(Self::Run(raw.into_config(env)?))
+    }
+}
+
+impl ServerConfig {
+    pub fn from_env_args() -> Result<Self, String> {
+        Self::from_action(ServerConfigAction::from_env_args()?)
+    }
+
+    pub fn from_args_and_env<A, S, E, K, V>(args: A, env: E) -> Result<Self, String>
+    where
+        A: IntoIterator<Item = S>,
+        S: AsRef<str>,
+        E: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self::from_action(ServerConfigAction::from_args_and_env(args, env)?)
+    }
+
+    fn from_action(action: ServerConfigAction) -> Result<Self, String> {
+        match action {
+            ServerConfigAction::Run(config) => Ok(config),
+            ServerConfigAction::Help(text) | ServerConfigAction::Version(text) => Err(text),
+        }
+    }
+}
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "edcb-mcp",
+    version = VERSION,
+    about = "EDCB CtrlCmd stdio MCP server"
+)]
+struct RawServerConfig {
+    #[arg(
+        long,
+        value_name = "host",
+        help = "EDCB host (env: EDCB_HOST, default: 127.0.0.1)"
+    )]
+    host: Option<String>,
+    #[arg(
+        long,
+        value_name = "port",
+        help = "EDCB CtrlCmd port (env: EDCB_PORT, default: 4510)"
+    )]
+    port: Option<u16>,
+    #[arg(
+        long,
+        value_name = "n",
+        value_parser = value_parser!(u64).range(1..),
+        help = "Request timeout in seconds (env: EDCB_TIMEOUT_SECONDS, default: 15)"
+    )]
+    timeout_seconds: Option<u64>,
+}
+
+impl RawServerConfig {
+    fn into_config(self, env: BTreeMap<String, String>) -> Result<ServerConfig, String> {
+        let mut config = ServerConfig::default();
         if let Some(host) = env.get("EDCB_HOST") {
             config.host.clone_from(host);
         }
@@ -60,42 +140,26 @@ impl ServerConfig {
         if let Some(timeout) = env.get("EDCB_TIMEOUT_SECONDS") {
             config.timeout = Duration::from_secs(parse_timeout(timeout)?);
         }
-
-        let args: Vec<String> = args
-            .into_iter()
-            .map(|arg| arg.as_ref().to_string())
-            .collect();
-        let mut index = 1;
-        while index < args.len() {
-            match args[index].as_str() {
-                "--host" => {
-                    index += 1;
-                    config.host = args
-                        .get(index)
-                        .ok_or_else(|| "--host requires a value".to_string())?
-                        .clone();
-                }
-                "--port" => {
-                    index += 1;
-                    config.port = parse_port(
-                        args.get(index)
-                            .ok_or_else(|| "--port requires a value".to_string())?,
-                    )?;
-                }
-                "--timeout-seconds" => {
-                    index += 1;
-                    config.timeout = Duration::from_secs(parse_timeout(
-                        args.get(index)
-                            .ok_or_else(|| "--timeout-seconds requires a value".to_string())?,
-                    )?);
-                }
-                unknown => return Err(format!("unknown argument {unknown}")),
-            }
-            index += 1;
+        if let Some(host) = self.host {
+            config.host = host;
+        }
+        if let Some(port) = self.port {
+            config.port = port;
+        }
+        if let Some(timeout_seconds) = self.timeout_seconds {
+            config.timeout = Duration::from_secs(timeout_seconds);
         }
 
         Ok(config)
     }
+}
+
+fn clap_error_message(error: clap::Error) -> String {
+    let message = error.to_string();
+    message
+        .strip_prefix("error: ")
+        .unwrap_or(&message)
+        .to_string()
 }
 
 fn parse_port(value: &str) -> Result<u16, String> {
@@ -137,13 +201,7 @@ pub struct PluginKindParam {
 
 impl PluginKindParam {
     pub fn try_into_plugin_kind(&self) -> Result<PluginKind, String> {
-        match self.kind.as_str() {
-            "write" => Ok(PluginKind::Write),
-            "rec_name" => Ok(PluginKind::RecName),
-            value => Err(format!(
-                "unsupported plugin kind {value}; expected \"write\" or \"rec_name\""
-            )),
-        }
+        self.kind.parse()
     }
 }
 

@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -53,6 +54,18 @@ const CMD_EPG_SRV_GET_STATUS_NOTIFY2: i32 = 2200;
 pub enum PluginKind {
     RecName = 1,
     Write = 2,
+}
+
+impl FromStr for PluginKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "write" => Ok(Self::Write),
+            "rec_name" => Ok(Self::RecName),
+            _ => Err(format!("plugin kind must be write or rec_name: {value}")),
+        }
+    }
 }
 
 const DEFAULT_RESERVE_ID: i32 = 0x7fff_ffff;

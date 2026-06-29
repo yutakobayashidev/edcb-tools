@@ -1,14 +1,15 @@
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::DateTime;
 use edcb_tools::{
-    BroadcastType, ChannelType, DuplicateTitleCheckScope, ProgramGenreRange, ProgramSearchQuery,
-    SearchDateInfo, ServiceKey, TimeTableQuery,
+    BroadcastType, ChannelType, DuplicateTitleCheckScope, PluginKind, ProgramGenreRange,
+    ProgramSearchQuery, SearchDateInfo, ServiceKey, TimeTableQuery,
     mcp::{
         CreateReservationConditionParam, EdcbMcpServer, GetTimetableParam, PluginKindParam,
         ReservationConditionIdParam, SearchProgramsDateParam, SearchProgramsGenreParam,
-        SearchProgramsParam, SearchProgramsServiceParam, ServerConfig,
+        SearchProgramsParam, SearchProgramsServiceParam, ServerConfig, ServerConfigAction,
     },
 };
 use rmcp::ServiceExt;
@@ -114,7 +115,32 @@ fn invalid_config_reports_the_bad_field() {
 }
 
 #[test]
+fn config_help_is_parsed_as_an_action() {
+    let action = ServerConfigAction::from_args_and_env(
+        ["edcb-mcp", "--help"],
+        std::iter::empty::<(&str, &str)>(),
+    )
+    .expect("help should parse as a config action");
+
+    match action {
+        ServerConfigAction::Help(text) => {
+            assert!(text.contains("Usage: edcb-mcp [OPTIONS]"));
+            assert!(text.contains("--host"));
+        }
+        other => panic!("expected help action, got {other:?}"),
+    }
+}
+
+#[test]
 fn plugin_kind_param_parses_supported_values() {
+    assert_eq!(
+        PluginKind::from_str("write").expect("write plugin kind should parse") as u16,
+        2
+    );
+    assert_eq!(
+        PluginKind::from_str("rec_name").expect("rec_name plugin kind should parse") as u16,
+        1
+    );
     assert_eq!(
         PluginKindParam {
             kind: "write".to_string()

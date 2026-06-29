@@ -3,7 +3,7 @@ use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset};
-use clap::{Args, CommandFactory, Parser, Subcommand, error::ErrorKind, value_parser};
+use clap::{Args, Parser, Subcommand, error::ErrorKind, value_parser};
 use serde::Serialize;
 
 use crate::{
@@ -296,12 +296,8 @@ enum RawCommand {
     TunerProcesses,
     #[command(about = "List EDCB plugins")]
     Plugins {
-        #[arg(
-            value_name = "write|rec_name",
-            value_parser = ["write", "rec_name"],
-            help = "Plugin kind"
-        )]
-        kind: String,
+        #[arg(value_name = "write|rec_name", help = "Plugin kind")]
+        kind: PluginKind,
     },
     #[command(about = "Get EDCB notify server status")]
     NotifyStatus,
@@ -317,7 +313,7 @@ impl RawCommand {
             Self::ReservationConditions(args) => args.try_into_command(),
             Self::TunerReserves => Ok(CliCommand::TunerReserves),
             Self::TunerProcesses => Ok(CliCommand::TunerProcesses),
-            Self::Plugins { kind } => Ok(CliCommand::Plugins(parse_plugin_kind(&kind)?)),
+            Self::Plugins { kind } => Ok(CliCommand::Plugins(kind)),
             Self::NotifyStatus => Ok(CliCommand::NotifyStatus),
         }
     }
@@ -859,16 +855,6 @@ fn invalid_search_date_range(value: &str) -> CliError {
     ))
 }
 
-fn parse_plugin_kind(value: &str) -> Result<PluginKind, CliError> {
-    match value {
-        "write" => Ok(PluginKind::Write),
-        "rec_name" => Ok(PluginKind::RecName),
-        _ => Err(CliError::invalid_usage(format!(
-            "plugin kind must be write or rec_name: {value}"
-        ))),
-    }
-}
-
 fn parse_port(value: &str) -> Result<u16, CliError> {
     value.parse().map_err(|_| {
         CliError::invalid_usage(format!("port must be a number in 0..=65535: {value}"))
@@ -1275,11 +1261,6 @@ fn format_notify_status_plain(value: &NotifySrvInfo) -> String {
         value.param2,
         value.count
     )
-}
-
-pub fn help_text() -> String {
-    let mut command = RawCli::command();
-    command.render_long_help().to_string()
 }
 
 pub fn version_text() -> String {

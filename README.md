@@ -263,6 +263,8 @@ EDCB_HOST=127.0.0.1 EDCB_PORT=4510 EDCB_TIMEOUT_SECONDS=15 cargo run --bin edcb-
 CLI options take precedence over environment variables. Defaults are
 `127.0.0.1`, port `4510`, and a 15 second timeout.
 
+Run `edcb-mcp --help` for clap-generated server options from the current build.
+
 Exposed MCP tools:
 
 - `list_services`
