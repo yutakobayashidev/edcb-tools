@@ -139,6 +139,7 @@ fn mcp_server_exposes_v1_tools() {
     assert_eq!(
         tool_names,
         vec![
+            "create_reservation",
             "get_notify_status",
             "get_recorded_info",
             "list_plugins",
@@ -147,6 +148,8 @@ fn mcp_server_exposes_v1_tools() {
             "list_services",
             "list_tuner_processes",
             "list_tuner_reserves",
+            "preview_reservation",
+            "search_programs",
         ]
     );
 }

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use edcb_mcp::{
-    PluginKind,
+    EventKey, PluginKind, ProgramSearchQuery, ServiceKey,
     cli::{CliAction, CliCommand, CliInvocation, OutputMode, format_services_plain},
     types::ServiceInfo,
 };
@@ -79,6 +79,93 @@ fn invalid_usage_uses_exit_code_2() {
 
     assert_eq!(error.exit_code, 2);
     assert!(error.message.contains("info-id"));
+}
+
+#[test]
+fn parses_program_search_command() {
+    let action = CliAction::from_args_and_env(
+        [
+            "edcb",
+            "--json",
+            "programs",
+            "search",
+            "--keyword",
+            "ニュース",
+            "--title-only",
+            "--service",
+            "32736:32736:1024",
+        ],
+        empty_env(),
+    )
+    .expect("program search command should parse");
+
+    assert_eq!(
+        action,
+        CliAction::Run(CliInvocation {
+            host: "127.0.0.1".to_string(),
+            port: 4510,
+            timeout: Duration::from_secs(15),
+            output: OutputMode::Json,
+            command: CliCommand::ProgramsSearch(ProgramSearchQuery {
+                keyword: "ニュース".to_string(),
+                title_only: true,
+                service: Some(ServiceKey {
+                    onid: 32736,
+                    tsid: 32736,
+                    sid: 1024,
+                }),
+            }),
+        })
+    );
+}
+
+#[test]
+fn parses_reservation_preview_and_create_commands() {
+    let preview = CliAction::from_args_and_env(
+        ["edcb", "reserves", "preview", "--event", "1:2:3:4"],
+        empty_env(),
+    )
+    .expect("reservation preview command should parse");
+    let create = CliAction::from_args_and_env(
+        ["edcb", "reserves", "create", "--event", "1:2:3:4", "--yes"],
+        empty_env(),
+    )
+    .expect("reservation create command should parse");
+    let event = EventKey {
+        service: ServiceKey {
+            onid: 1,
+            tsid: 2,
+            sid: 3,
+        },
+        eid: 4,
+    };
+
+    assert!(matches!(
+        preview,
+        CliAction::Run(CliInvocation {
+            command: CliCommand::ReservePreview(parsed),
+            ..
+        }) if parsed == event
+    ));
+    assert!(matches!(
+        create,
+        CliAction::Run(CliInvocation {
+            command: CliCommand::ReserveCreate(parsed),
+            ..
+        }) if parsed == event
+    ));
+}
+
+#[test]
+fn reserve_create_requires_confirmation() {
+    let error = CliAction::from_args_and_env(
+        ["edcb", "reserves", "create", "--event", "1:2:3:4"],
+        empty_env(),
+    )
+    .expect_err("reservation creation should require --yes");
+
+    assert_eq!(error.exit_code, 2);
+    assert!(error.message.contains("--yes"));
 }
 
 #[test]

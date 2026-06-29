@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::{EdcbClient, PluginKind};
+use crate::{EdcbClient, EventKey, PluginKind, ProgramSearchQuery, ServiceKey};
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -132,6 +132,40 @@ impl PluginKindParam {
     }
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchProgramsParam {
+    pub keyword: String,
+    #[serde(default)]
+    pub title_only: bool,
+    pub service: Option<String>,
+}
+
+impl SearchProgramsParam {
+    fn try_into_query(&self) -> Result<ProgramSearchQuery, String> {
+        let service = self
+            .service
+            .as_deref()
+            .map(|value| value.parse::<ServiceKey>())
+            .transpose()?;
+        Ok(ProgramSearchQuery {
+            keyword: self.keyword.clone(),
+            title_only: self.title_only,
+            service,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReservationEventParam {
+    pub event: String,
+}
+
+impl ReservationEventParam {
+    fn try_into_event_key(&self) -> Result<EventKey, String> {
+        self.event.parse()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EdcbMcpServer {
     config: ServerConfig,
@@ -142,7 +176,7 @@ pub struct EdcbMcpServer {
 impl ServerHandler for EdcbMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("EDCB CtrlCmd read-only MCP server")
+            .with_instructions("EDCB CtrlCmd MCP server")
     }
 }
 
@@ -190,6 +224,42 @@ impl EdcbMcpServer {
         Parameters(params): Parameters<RecordedInfoParam>,
     ) -> Result<CallToolResult, String> {
         to_call_tool_result(self.client().get_rec_info(params.info_id).await)
+    }
+
+    #[tool(
+        name = "search_programs",
+        description = "Search EDCB programs by keyword, optionally title-only or scoped to one service"
+    )]
+    pub async fn search_programs(
+        &self,
+        Parameters(params): Parameters<SearchProgramsParam>,
+    ) -> Result<CallToolResult, String> {
+        let query = params.try_into_query()?;
+        to_call_tool_result(self.client().search_programs(&query).await)
+    }
+
+    #[tool(
+        name = "preview_reservation",
+        description = "Build an EDCB reservation from an event without sending a mutation command"
+    )]
+    pub async fn preview_reservation(
+        &self,
+        Parameters(params): Parameters<ReservationEventParam>,
+    ) -> Result<CallToolResult, String> {
+        let event_key = params.try_into_event_key()?;
+        to_call_tool_result(self.client().preview_reservation(event_key).await)
+    }
+
+    #[tool(
+        name = "create_reservation",
+        description = "Create an EDCB reservation from an event using the server default reservation settings"
+    )]
+    pub async fn create_reservation(
+        &self,
+        Parameters(params): Parameters<ReservationEventParam>,
+    ) -> Result<CallToolResult, String> {
+        let event_key = params.try_into_event_key()?;
+        to_call_tool_result(self.client().create_reservation(event_key).await)
     }
 
     #[tool(

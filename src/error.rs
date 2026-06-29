@@ -8,6 +8,8 @@ pub enum EdcbError {
     Timeout,
     #[error("EDCB command returned status {0}")]
     CommandStatus(i32),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("decode error: {0}")]
     Decode(String),
 }

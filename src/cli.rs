@@ -5,9 +5,9 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::{
-    EdcbClient, PluginKind,
+    EdcbClient, EventKey, PluginKind, ProgramSearchQuery, ServiceKey,
     types::{
-        NotifySrvInfo, RecFileInfo, ReserveData, ServiceInfo, TunerProcessStatusInfo,
+        EventInfo, NotifySrvInfo, RecFileInfo, ReserveData, ServiceInfo, TunerProcessStatusInfo,
         TunerReserveInfo,
     },
 };
@@ -27,6 +27,9 @@ pub enum CliCommand {
     Reserves,
     RecordedList,
     RecordedGet(i32),
+    ProgramsSearch(ProgramSearchQuery),
+    ReservePreview(EventKey),
+    ReserveCreate(EventKey),
     TunerReserves,
     TunerProcesses,
     Plugins(PluginKind),
@@ -162,6 +165,16 @@ where
             }
             "--json" => invocation.output = OutputMode::Json,
             "--plain" => invocation.output = OutputMode::Plain,
+            "--keyword" | "--service" | "--event" => {
+                let key = args[index].clone();
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| CliError::invalid_usage(format!("{key} requires a value")))?;
+                positionals.push(key);
+                positionals.push(value.clone());
+            }
+            "--title-only" | "--yes" => positionals.push(args[index].clone()),
             value if value.starts_with('-') => {
                 return Err(CliError::invalid_usage(format!("unknown argument {value}")));
             }
@@ -190,6 +203,21 @@ fn parse_command(positionals: &[String]) -> Result<CliCommand, CliError> {
                 CliError::invalid_usage(format!("info-id must be an integer: {info_id}"))
             })?))
         }
+        [command, subcommand, rest @ ..] if command == "programs" && subcommand == "search" => {
+            Ok(CliCommand::ProgramsSearch(parse_program_search(rest)?))
+        }
+        [command, subcommand, rest @ ..] if command == "reserves" && subcommand == "preview" => {
+            Ok(CliCommand::ReservePreview(parse_event_arg(rest)?))
+        }
+        [command, subcommand, rest @ ..] if command == "reserves" && subcommand == "create" => {
+            let event_key = parse_event_arg(rest)?;
+            if !rest.iter().any(|value| value == "--yes") {
+                return Err(CliError::invalid_usage(
+                    "reserves create requires --yes to confirm mutation",
+                ));
+            }
+            Ok(CliCommand::ReserveCreate(event_key))
+        }
         [command, kind] if command == "plugins" => {
             Ok(CliCommand::Plugins(parse_plugin_kind(kind)?))
         }
@@ -197,6 +225,76 @@ fn parse_command(positionals: &[String]) -> Result<CliCommand, CliError> {
             "unknown or incomplete command: {command}"
         ))),
     }
+}
+
+fn parse_program_search(args: &[String]) -> Result<ProgramSearchQuery, CliError> {
+    let mut keyword = None;
+    let mut title_only = false;
+    let mut service = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--keyword" => {
+                index += 1;
+                keyword = Some(
+                    args.get(index)
+                        .ok_or_else(|| CliError::invalid_usage("--keyword requires a value"))?
+                        .clone(),
+                );
+            }
+            "--title-only" => title_only = true,
+            "--service" => {
+                index += 1;
+                service = Some(parse_service_key(args.get(index).ok_or_else(|| {
+                    CliError::invalid_usage("--service requires onid:tsid:sid")
+                })?)?);
+            }
+            value => {
+                return Err(CliError::invalid_usage(format!(
+                    "unknown programs search argument {value}"
+                )));
+            }
+        }
+        index += 1;
+    }
+    let keyword = keyword
+        .ok_or_else(|| CliError::invalid_usage("programs search requires --keyword <text>"))?;
+    Ok(ProgramSearchQuery {
+        keyword,
+        title_only,
+        service,
+    })
+}
+
+fn parse_event_arg(args: &[String]) -> Result<EventKey, CliError> {
+    let mut event = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--event" => {
+                index += 1;
+                event = Some(parse_event_key(args.get(index).ok_or_else(|| {
+                    CliError::invalid_usage("--event requires onid:tsid:sid:eid")
+                })?)?);
+            }
+            "--yes" => {}
+            value => {
+                return Err(CliError::invalid_usage(format!(
+                    "unknown reservation argument {value}"
+                )));
+            }
+        }
+        index += 1;
+    }
+    event.ok_or_else(|| CliError::invalid_usage("reservation command requires --event"))
+}
+
+fn parse_service_key(value: &str) -> Result<ServiceKey, CliError> {
+    value.parse().map_err(CliError::invalid_usage)
+}
+
+fn parse_event_key(value: &str) -> Result<EventKey, CliError> {
+    value.parse().map_err(CliError::invalid_usage)
 }
 
 fn parse_plugin_kind(value: &str) -> Result<PluginKind, CliError> {
@@ -249,6 +347,31 @@ pub async fn execute(invocation: CliInvocation) -> Result<String, CliError> {
                 format_recorded_info_plain(&value)
             })
         }
+        CliCommand::ProgramsSearch(query) => {
+            let value = client
+                .search_programs(&query)
+                .await
+                .map_err(runtime_error)?;
+            render(&invocation.output, &value, || format_programs_plain(&value))
+        }
+        CliCommand::ReservePreview(event_key) => {
+            let value = client
+                .preview_reservation(event_key)
+                .await
+                .map_err(runtime_error)?;
+            render(&invocation.output, &value, || {
+                format_reservation_plain(&value)
+            })
+        }
+        CliCommand::ReserveCreate(event_key) => {
+            let value = client
+                .create_reservation(event_key)
+                .await
+                .map_err(runtime_error)?;
+            render(&invocation.output, &value, || {
+                format_reservation_plain(&value)
+            })
+        }
         CliCommand::TunerReserves => {
             let value = client.enum_tuner_reserve().await.map_err(runtime_error)?;
             render(&invocation.output, &value, || {
@@ -277,6 +400,40 @@ pub async fn execute(invocation: CliInvocation) -> Result<String, CliError> {
             })
         }
     }
+}
+
+fn format_programs_plain(programs: &[EventInfo]) -> String {
+    programs
+        .iter()
+        .map(|event| {
+            let title = event
+                .short_info
+                .as_ref()
+                .map(|info| info.event_name.as_str())
+                .unwrap_or("");
+            let start = event
+                .start_time
+                .map(|time| time.to_rfc3339())
+                .unwrap_or_else(|| "-".to_string());
+            format!(
+                "{}:{}:{}:{}\t{}\t{}\n",
+                event.onid, event.tsid, event.sid, event.eid, start, title
+            )
+        })
+        .collect()
+}
+
+fn format_reservation_plain(reserve: &ReserveData) -> String {
+    format!(
+        "{}:{}:{}:{}\t{}\t{}\t{}\n",
+        reserve.onid,
+        reserve.tsid,
+        reserve.sid,
+        reserve.eid,
+        reserve.start_time.to_rfc3339(),
+        reserve.station_name,
+        reserve.title
+    )
 }
 
 fn runtime_error(error: crate::EdcbError) -> CliError {
@@ -400,6 +557,8 @@ pub fn help_text() -> &'static str {
 USAGE:
   edcb [global flags] <command>
   edcb [global flags] recorded get <info-id>
+  edcb [global flags] programs search --keyword <text>
+  edcb [global flags] reserves create --event <onid:tsid:sid:eid> --yes
   edcb [global flags] plugins <write|rec_name>
 
 COMMANDS:
@@ -407,6 +566,9 @@ COMMANDS:
   reserves
   recorded list
   recorded get <info-id>
+  programs search --keyword <text> [--title-only] [--service <onid:tsid:sid>]
+  reserves preview --event <onid:tsid:sid:eid>
+  reserves create --event <onid:tsid:sid:eid> --yes
   tuner-reserves
   tuner-processes
   plugins <write|rec_name>
@@ -427,6 +589,9 @@ EXAMPLES:
   edcb reserves --plain
   edcb recorded list
   edcb recorded get 1 --json
+  edcb programs search --keyword ニュース --title-only
+  edcb reserves preview --event 32736:32736:1024:4208
+  edcb reserves create --event 32736:32736:1024:4208 --yes
   edcb plugins write
   edcb --host 172.18.0.7 notify-status
 "

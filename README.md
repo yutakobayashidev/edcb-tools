@@ -4,8 +4,8 @@ Rust client library, command line interface, and MCP server for EDCB/EpgTimer
 CtrlCmd.
 
 This crate currently provides a Tokio-based TCP client, binary codec, `edcb`
-CLI, and `edcb-mcp` stdio MCP server for the read-oriented CtrlCmd APIs used by
-EDCB integrations. The implementation is ported from `xtne6f/edcb.py`, with
+CLI, and `edcb-mcp` stdio MCP server for CtrlCmd APIs used by EDCB
+integrations. The implementation is ported from `xtne6f/edcb.py`, with
 KonomiTV's async usage used as a secondary reference.
 
 ## Supported in v1
@@ -16,6 +16,8 @@ KonomiTV's async usage used as a secondary reference.
 - EDCB primitive, string, vector, struct, and `SYSTEMTIME` codec
 - Service, EPG, reserve, recorded-file, tuner, plugin, auto-add, manual-add,
   and notify-status read APIs
+- Program search, recorded item detail retrieval, and event-based reservation
+  preview/create
 - Utility parsers for `ChSet5.txt`, `LogoData.ini`, logo directory indexes, and
   program extended text
 
@@ -24,7 +26,8 @@ KonomiTV's async usage used as a secondary reference.
 - [ ] Unix domain socket transport
 - [ ] Windows named pipe transport
 - [ ] View app stream / SrvPipe stream helpers
-- [ ] Reserve, recorded-file, auto-add, and manual-add mutation APIs
+- [ ] Reserve change/delete, recorded-file, auto-add, and manual-add mutation
+  APIs
 - [x] MCP server surface
 - [ ] HTTP MCP transport
 
@@ -75,10 +78,20 @@ Available commands:
 - `reserves`
 - `recorded list`
 - `recorded get <info-id>`
+- `programs search --keyword <text> [--title-only] [--service <onid:tsid:sid>]`
+- `reserves preview --event <onid:tsid:sid:eid>`
+- `reserves create --event <onid:tsid:sid:eid> --yes`
 - `tuner-reserves`
 - `tuner-processes`
 - `plugins <write|rec_name>`
 - `notify-status`
+
+`reserves preview` is a client-side preview that fetches the EDCB default
+reservation settings and the target event, then builds the `ReserveData` that
+would be sent. EDCB does not expose a reservation dry-run command. Use
+`reserves create ... --yes` to send the actual add-reservation command.
+`programs search` prints event keys as `onid:tsid:sid:eid`, which can be passed
+to `reserves preview` or `reserves create`.
 
 ## MCP Server
 
@@ -103,10 +116,16 @@ Exposed MCP tools:
 - `list_reserves`
 - `list_recorded`
 - `get_recorded_info`
+- `search_programs`
+- `preview_reservation`
+- `create_reservation`
 - `list_tuner_reserves`
 - `list_tuner_processes`
 - `list_plugins`
 - `get_notify_status`
+
+`preview_reservation` does not mutate EDCB state. `create_reservation` creates
+one reservation from an event key and the server's default reservation settings.
 
 ## Development
 

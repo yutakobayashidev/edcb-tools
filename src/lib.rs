@@ -9,5 +9,6 @@ pub mod util;
 
 mod codec;
 
-pub use client::{EdcbClient, PluginKind};
+pub use client::{EdcbClient, PluginKind, build_reservation_from_event};
 pub use error::{EdcbError, Result};
+pub use types::{EventKey, ProgramSearchQuery, ServiceKey};

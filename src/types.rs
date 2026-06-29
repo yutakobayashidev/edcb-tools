@@ -1,5 +1,67 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, FixedOffset};
 use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ServiceKey {
+    pub onid: u16,
+    pub tsid: u16,
+    pub sid: u16,
+}
+
+impl ServiceKey {
+    pub fn to_search_id(self) -> i64 {
+        (i64::from(self.onid) << 32) | (i64::from(self.tsid) << 16) | i64::from(self.sid)
+    }
+}
+
+impl FromStr for ServiceKey {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<_> = value.split(':').collect();
+        if parts.len() != 3 {
+            return Err(format!("service key must be onid:tsid:sid, got {value}"));
+        }
+        Ok(Self {
+            onid: parse_key_part(parts[0], "onid")?,
+            tsid: parse_key_part(parts[1], "tsid")?,
+            sid: parse_key_part(parts[2], "sid")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EventKey {
+    pub service: ServiceKey,
+    pub eid: u16,
+}
+
+impl FromStr for EventKey {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<_> = value.split(':').collect();
+        if parts.len() != 4 {
+            return Err(format!("event key must be onid:tsid:sid:eid, got {value}"));
+        }
+        Ok(Self {
+            service: ServiceKey {
+                onid: parse_key_part(parts[0], "onid")?,
+                tsid: parse_key_part(parts[1], "tsid")?,
+                sid: parse_key_part(parts[2], "sid")?,
+            },
+            eid: parse_key_part(parts[3], "eid")?,
+        })
+    }
+}
+
+fn parse_key_part(value: &str, name: &str) -> Result<u16, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{name} must be a number in 0..=65535: {value}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChSet5Item {
@@ -242,6 +304,13 @@ pub struct SearchKeyInfo {
     pub chk_rec_no_service: bool,
     pub chk_duration_min: u16,
     pub chk_duration_max: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProgramSearchQuery {
+    pub keyword: String,
+    pub title_only: bool,
+    pub service: Option<ServiceKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

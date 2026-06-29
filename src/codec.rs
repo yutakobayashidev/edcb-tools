@@ -68,17 +68,19 @@ impl Writer {
         self.write_u16(0);
     }
 
-    #[cfg(test)]
     pub(crate) fn write_system_time(&mut self, value: DateTime<FixedOffset>) {
         use chrono::{Datelike, Timelike};
 
-        self.write_u16(value.year() as u16);
-        self.write_u16(value.month() as u16);
-        self.write_u16(value.weekday().num_days_from_sunday() as u16);
-        self.write_u16(value.day() as u16);
-        self.write_u16(value.hour() as u16);
-        self.write_u16(value.minute() as u16);
-        self.write_u16(value.second() as u16);
+        self.write_u16(u16::try_from(value.year()).expect("SYSTEMTIME year fits in u16"));
+        self.write_u16(u16::try_from(value.month()).expect("SYSTEMTIME month fits in u16"));
+        self.write_u16(
+            u16::try_from(value.weekday().num_days_from_sunday())
+                .expect("SYSTEMTIME day of week fits in u16"),
+        );
+        self.write_u16(u16::try_from(value.day()).expect("SYSTEMTIME day fits in u16"));
+        self.write_u16(u16::try_from(value.hour()).expect("SYSTEMTIME hour fits in u16"));
+        self.write_u16(u16::try_from(value.minute()).expect("SYSTEMTIME minute fits in u16"));
+        self.write_u16(u16::try_from(value.second()).expect("SYSTEMTIME second fits in u16"));
         self.write_u16(0);
     }
 
@@ -307,13 +309,6 @@ pub(crate) fn write_search_key_info(writer: &mut Writer, value: &SearchKeyInfo) 
         writer.write_u8(u8::from(value.not_contet_flag));
         writer.write_u8(u8::from(value.not_date_flag));
         writer.write_u8(value.free_ca_flag);
-        writer.write_u8(u8::from(value.chk_rec_end));
-        let chk_rec_day = if value.chk_rec_no_service {
-            value.chk_rec_day % 10000 + 40000
-        } else {
-            value.chk_rec_day
-        };
-        writer.write_u16(chk_rec_day);
     });
 }
 
@@ -376,6 +371,15 @@ fn read_rec_file_set_info(reader: &mut Reader<'_>) -> Result<RecFileSetInfo> {
     })
 }
 
+fn write_rec_file_set_info(writer: &mut Writer, value: &RecFileSetInfo) {
+    writer.write_struct(|writer| {
+        writer.write_string(&value.rec_folder);
+        writer.write_string(&value.write_plug_in);
+        writer.write_string(&value.rec_name_plug_in);
+        writer.write_string("");
+    });
+}
+
 fn read_rec_setting_data(reader: &mut Reader<'_>) -> Result<RecSettingData> {
     reader.read_struct(|reader| {
         let rec_mode = reader.read_u8()?;
@@ -408,6 +412,28 @@ fn read_rec_setting_data(reader: &mut Reader<'_>) -> Result<RecSettingData> {
             partial_rec_folder: reader.read_vector(read_rec_file_set_info)?,
         })
     })
+}
+
+pub(crate) fn write_rec_setting_data(writer: &mut Writer, value: &RecSettingData) {
+    writer.write_struct(|writer| {
+        writer.write_u8(value.rec_mode);
+        writer.write_u8(value.priority);
+        writer.write_u8(u8::from(value.tuijyuu_flag));
+        writer.write_u32(value.service_mode);
+        writer.write_u8(u8::from(value.pittari_flag));
+        writer.write_string(&value.bat_file_path);
+        writer.write_vector(&value.rec_folder_list, write_rec_file_set_info);
+        writer.write_u8(value.suspend_mode);
+        writer.write_u8(u8::from(value.reboot_flag));
+        let use_margin = value.start_margin.is_some() && value.end_margin.is_some();
+        writer.write_u8(u8::from(use_margin));
+        writer.write_i32(value.start_margin.unwrap_or_default());
+        writer.write_i32(value.end_margin.unwrap_or_default());
+        writer.write_u8(u8::from(value.continue_rec_flag));
+        writer.write_u8(value.partial_rec_flag);
+        writer.write_u32(value.tuner_id);
+        writer.write_vector(&value.partial_rec_folder, write_rec_file_set_info);
+    });
 }
 
 pub(crate) fn read_reserve_data(reader: &mut Reader<'_>) -> Result<ReserveData> {
@@ -448,6 +474,31 @@ pub(crate) fn read_reserve_data(reader: &mut Reader<'_>) -> Result<ReserveData> 
             rec_file_name_list,
         })
     })
+}
+
+pub(crate) fn write_reserve_data(writer: &mut Writer, value: &ReserveData) {
+    writer.write_struct(|writer| {
+        writer.write_string(&value.title);
+        writer.write_system_time(value.start_time);
+        writer.write_u32(value.duration_second);
+        writer.write_string(&value.station_name);
+        writer.write_u16(value.onid);
+        writer.write_u16(value.tsid);
+        writer.write_u16(value.sid);
+        writer.write_u16(value.eid);
+        writer.write_string(&value.comment);
+        writer.write_i32(value.reserve_id);
+        writer.write_u8(0);
+        writer.write_u8(value.overlap_mode);
+        writer.write_string("");
+        writer.write_system_time(value.start_time_epg);
+        write_rec_setting_data(writer, &value.rec_setting);
+        writer.write_i32(0);
+        writer.write_vector(&value.rec_file_name_list, |writer, value| {
+            writer.write_string(value)
+        });
+        writer.write_i32(0);
+    });
 }
 
 pub(crate) fn read_rec_file_info(reader: &mut Reader<'_>) -> Result<RecFileInfo> {
